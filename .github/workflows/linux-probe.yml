@@ -1,0 +1,60 @@
+# Lab probe, not part of YARD: what happens to YARD on Linux today.
+name: linux-probe
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: never
+      YARD_HOME: /tmp/yard-home
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages (Zed's script/linux, GPUI's share)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc g++ clang lld cmake pkg-config libasound2-dev libfontconfig-dev \
+            libglib2.0-dev libssl-dev libvulkan1 mesa-vulkan-drivers libwayland-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libzstd-dev libstdc++-12-dev xvfb imagemagick xdotool desktop-file-utils
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the production app
+        id: build
+        continue-on-error: true
+        run: cargo build -p yard --no-default-features 2>&1 | tee build.log
+      - name: Check the whole workspace
+        id: check
+        continue-on-error: true
+        run: cargo check --workspace --all-targets 2>&1 | tee check.log
+      - name: Test the workspace
+        id: test
+        if: steps.check.outcome == 'success'
+        continue-on-error: true
+        run: cargo test --workspace --no-fail-fast 2>&1 | tee test.log
+      - name: Run the app under Xvfb and take a screenshot
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          Xvfb :99 -screen 0 1280x800x24 & sleep 2
+          export DISPLAY=:99
+          YARD_LIFECYCLE=debug target/debug/yard > app.log 2>&1 & sleep 15
+          import -window root screenshot.png
+          xdotool search --name . getwindowname %@ > windows.txt 2>&1 || true
+          kill %2 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-probe
+          path: |
+            build.log
+            check.log
+            test.log
+            app.log
+            windows.txt
+            screenshot.png
+          if-no-files-found: ignore
