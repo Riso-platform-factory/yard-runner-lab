@@ -59,7 +59,8 @@ jobs:
           # Control: Zed's own Linux build in the same display
           curl -fsSL https://zed.dev/api/releases/stable/latest/zed-linux-x86_64.tar.gz -o zed.tgz && tar -xzf zed.tgz -C /tmp
           ZED_BIN=$(ls -d /tmp/zed*.app)/libexec/zed-editor
-          ZED_ALLOW_EMULATED_GPU=1 "$ZED_BIN" --foreground > zed.log 2>&1 & sleep 20
+          ZED_ALLOW_EMULATED_GPU=1 "$ZED_BIN" > zed.log 2>&1 & sleep 20
+          xdotool search --name . getwindowname %@ > zed-windows.txt 2>&1 || true
           import -window root zed.png
           pkill -f zed-editor || true
       - uses: actions/upload-artifact@v4
@@ -80,4 +81,5 @@ jobs:
             screenshot-xwd.png
             zed.png
             zed.log
+            zed-windows.txt
           if-no-files-found: ignore
