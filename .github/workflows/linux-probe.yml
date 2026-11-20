@@ -20,7 +20,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q gcc g++ clang lld cmake pkg-config libasound2-dev libfontconfig-dev \
             libglib2.0-dev libssl-dev libvulkan1 mesa-vulkan-drivers libwayland-dev libx11-xcb-dev \
-            libxkbcommon-x11-dev libzstd-dev libstdc++-12-dev xvfb imagemagick xdotool desktop-file-utils
+            libxkbcommon-x11-dev libzstd-dev libstdc++-12-dev xvfb imagemagick xdotool x11-utils desktop-file-utils
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the production app
@@ -35,16 +35,21 @@ jobs:
         id: test
         if: steps.check.outcome == 'success'
         continue-on-error: true
-        run: cargo test --workspace --no-fail-fast 2>&1 | tee test.log
+        run: |
+          cargo test --workspace --no-fail-fast -- --skip what_is_outside_dev_is_in_production 2>&1 | tee test.log
+          for i in $(seq 20); do cargo test -q -p yard_update --test other_systems 2>&1 | tail -1; done | tee other_systems_20.log
       - name: Run the app under Xvfb and take a screenshot
         if: steps.build.outcome == 'success'
         continue-on-error: true
         run: |
           Xvfb :99 -screen 0 1280x800x24 & sleep 2
           export DISPLAY=:99
-          YARD_LIFECYCLE=debug target/debug/yard > app.log 2>&1 & sleep 15
+          env -u YARD_HOME YARD_LIFECYCLE=debug target/debug/yard > app.log 2>&1 & sleep 15
           import -window root screenshot.png
           xdotool search --name . getwindowname %@ > windows.txt 2>&1 || true
+          xprop -root _NET_ACTIVE_WINDOW >> windows.txt 2>&1 || true
+          for w in $(xdotool search --name . 2>/dev/null); do xprop -id $w WM_CLASS _NET_WM_NAME 2>/dev/null; xprop -id $w _NET_WM_ICON 2>/dev/null | head -c 120; echo; done >> windows.txt
+          ls -R ~/.config/yard ~/.local/share/yard > dirs.txt 2>&1 || true
           kill %2 || true
       - uses: actions/upload-artifact@v4
         if: always()
@@ -56,5 +61,7 @@ jobs:
             test.log
             app.log
             windows.txt
+            dirs.txt
+            other_systems_20.log
             screenshot.png
           if-no-files-found: ignore

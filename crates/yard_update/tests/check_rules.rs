@@ -1,6 +1,9 @@
 //! The rules that keep the check safe: a bounded answer, no redirects, the
 //! host only in the logs, versions compared by precedence, and the timeout.
 
+// The check and the install run only on macOS until the release-updates slice.
+#![cfg(target_os = "macos")]
+
 use gpui::TestAppContext;
 use http_client::{AsyncBody, FakeHttpClient, Response};
 use std::{

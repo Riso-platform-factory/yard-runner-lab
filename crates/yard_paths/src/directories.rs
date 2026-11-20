@@ -28,13 +28,14 @@ pub enum Origin {
 impl Paths {
     /// The directories for this run: under the product's
     /// [home variable](yard_product::Product::home_variable) when it is set and
-    /// not empty, otherwise the platform's locations for the product name. A
-    /// relative home is taken from the folder the application starts in.
+    /// not empty, otherwise the platform's locations for the product name, in
+    /// [lower case](yard_product::Product::file_name) on Linux. A relative
+    /// home is taken from the folder the application starts in.
     pub fn from_env(product: &yard_product::Product) -> Self {
         let _span = tracing::info_span!("paths-resolve").entered();
         let home_variable = product.home_variable();
         let paths = Self::resolve(
-            product.name,
+            &folder_name(product),
             std::env::var_os(&home_variable),
             std::env::var_os("XDG_CONFIG_HOME"),
         );
@@ -106,9 +107,34 @@ impl Paths {
     }
 }
 
+/// The name of the product's folders: on Linux and FreeBSD the lower-case
+/// file name, as Zed's are, and elsewhere the name as written.
+fn folder_name(product: &yard_product::Product) -> String {
+    if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        product.file_name()
+    } else {
+        product.name.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folders_are_named_in_lower_case_on_linux_only() {
+        let product = yard_product::Product {
+            name: "Lab Notes Pro",
+            version: "0",
+            identifier: "test.yard.labnotes",
+        };
+        let expected = if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            "lab-notes-pro"
+        } else {
+            "Lab Notes Pro"
+        };
+        assert_eq!(folder_name(&product), expected);
+    }
 
     #[test]
     fn a_relative_home_is_made_absolute() {

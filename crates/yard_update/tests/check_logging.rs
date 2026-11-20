@@ -1,3 +1,6 @@
+// The check and the install run only on macOS until the release-updates slice.
+#![cfg(target_os = "macos")]
+
 use gpui::TestAppContext;
 use http_client::{AsyncBody, FakeHttpClient, HttpClient, Response};
 use std::{

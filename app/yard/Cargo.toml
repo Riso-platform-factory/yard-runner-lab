@@ -28,8 +28,14 @@ command_palette = { workspace = true, default-features = false }
 yard_update = { workspace = true, default-features = false }
 reqwest_client = { workspace = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+image.workspace = true
+
 [dev-dependencies]
 serde_json.workspace = true
 
 [build-dependencies]
 yard_build_config = { workspace = true, default-features = false }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.build-dependencies]
+image.workspace = true

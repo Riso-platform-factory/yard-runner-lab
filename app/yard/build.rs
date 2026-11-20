@@ -18,4 +18,24 @@ fn main() {
         "cargo:rustc-env=PRODUCT_UPDATE_URL={}",
         config.update_url.unwrap_or_default()
     );
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    prepare_app_icon_x11(&config.icon);
+}
+
+/// Writes the config's icon at 256 × 256 to `$OUT_DIR/app_icon.png`, which
+/// the app decodes for its X11 window icon, as Zed's `build.rs` does.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn prepare_app_icon_x11(icon: &std::path::Path) {
+    use image::{ImageReader, imageops};
+
+    let resized = ImageReader::open(icon)
+        .unwrap_or_else(|error| panic!("opening {} failed: {error}", icon.display()))
+        .decode()
+        .unwrap_or_else(|error| panic!("decoding {} failed: {error}", icon.display()))
+        .resize(256, 256, imageops::FilterType::Lanczos3);
+    // The name matches the `include_bytes!` of the window options in `startup.rs`.
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("app_icon.png");
+    resized
+        .save(&out)
+        .unwrap_or_else(|error| panic!("saving {} failed: {error}", out.display()));
 }

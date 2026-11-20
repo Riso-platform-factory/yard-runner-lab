@@ -58,6 +58,32 @@ impl Product {
     pub fn lifecycle_variable(&self) -> String {
         format!("{}_LIFECYCLE", self.environment_prefix())
     }
+
+    /// The name of the product's files and folders on Linux: see
+    /// [`file_name`].
+    pub fn file_name(&self) -> String {
+        file_name(self.name)
+    }
+}
+
+/// The name of an application's files and folders on Linux, as Zed's are in
+/// lower case: `name` in lower case ASCII, with every run of characters that
+/// are not ASCII letters or digits turned into one `-`, and no `-` at either
+/// end. It is empty when `name` holds no ASCII letter or digit; the build
+/// config refuses such a name.
+pub fn file_name(name: &str) -> String {
+    let mut file_name = String::with_capacity(name.len());
+    for c in name.chars().map(|c| c.to_ascii_lowercase()) {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            file_name.push(c);
+        } else if !file_name.is_empty() && !file_name.ends_with('-') {
+            file_name.push('-');
+        }
+    }
+    if file_name.ends_with('-') {
+        file_name.pop();
+    }
+    file_name
 }
 
 /// At least two labels separated by dots, each of ASCII letters, digits, and
@@ -105,6 +131,24 @@ mod tests {
                 format!("{prefix}_LIFECYCLE"),
                 "{name}"
             );
+        }
+    }
+
+    #[test]
+    fn file_names_are_lower_case_with_one_dash_between_words() {
+        for (name, file_name) in [
+            ("Lab", "lab"),
+            ("Lab Notes Pro", "lab-notes-pro"),
+            ("yard", "yard"),
+            ("my-app 2", "my-app-2"),
+            ("Sample-app 2.0", "sample-app-2-0"),
+            ("  Lab -- Notes!  ", "lab-notes"),
+            ("café!", "caf"),
+            ("Ünï", "n"),
+            ("!!!", ""),
+            ("", ""),
+        ] {
+            assert_eq!(product(name).file_name(), file_name, "{name}");
         }
     }
 

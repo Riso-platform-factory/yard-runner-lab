@@ -2,25 +2,44 @@
 //! release, and when it is newer than the product, installs it and shows a
 //! toast, or shows a toast that it is available when it cannot be installed.
 
-use futures::{AsyncReadExt as _, FutureExt as _};
-use gpui::{App, AsyncApp};
-use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, RedirectPolicy, Request, Url};
-use std::{cmp::Ordering, sync::Arc, time::Duration};
-use tracing::Instrument as _;
+use gpui::App;
+use http_client::HttpClient;
+use std::sync::Arc;
 use yard_product::Product;
 use yard_shell::Extension;
+// The check installs what it finds, which only macOS does yet.
+#[cfg(target_os = "macos")]
+use {
+    futures::{AsyncReadExt as _, FutureExt as _},
+    gpui::AsyncApp,
+    http_client::{AsyncBody, HttpRequestExt as _, RedirectPolicy, Request, Url},
+    std::{cmp::Ordering, time::Duration},
+    tracing::Instrument as _,
+};
+
+// TODO(release-updates): updates on Linux and Windows. The release-updates
+// slice unblocks them.
+/// Why there are no updates on this system.
+#[cfg(not(target_os = "macos"))]
+pub(super) const NOT_ON_THIS_SYSTEM: &str =
+    "updates on this system come with the release-updates slice";
 
 /// The wait before the first check, so that the start is not slowed.
+#[cfg(target_os = "macos")]
 const FIRST_CHECK: Duration = Duration::from_secs(5);
 /// The wait between two checks.
+#[cfg(target_os = "macos")]
 const NEXT_CHECK: Duration = Duration::from_secs(24 * 60 * 60);
 /// The longest a check may take.
+#[cfg(target_os = "macos")]
 const TIMEOUT: Duration = Duration::from_secs(30);
 /// The longest answer read.
+#[cfg(target_os = "macos")]
 const MAX_ANSWER: usize = 64 * 1024;
 
 /// The release file: its version, the address of its `.zip`, and the zip's
 /// SHA-256 in hex.
+#[cfg(target_os = "macos")]
 #[derive(serde::Deserialize)]
 struct Release {
     version: String,
@@ -29,6 +48,7 @@ struct Release {
 }
 
 /// What the checks of one run remember.
+#[cfg(target_os = "macos")]
 #[derive(Default)]
 struct Seen {
     /// The versions whose "available" toast was shown.
@@ -41,6 +61,7 @@ struct Seen {
 
 /// Starts checking `url` for a version newer than `product`'s, installing it
 /// and showing its toast through `extension`.
+#[cfg(target_os = "macos")]
 pub fn start(
     cx: &mut App,
     extension: &Extension,
@@ -64,8 +85,23 @@ pub fn start(
     .detach();
 }
 
+/// Checks nothing on this system, saying why inside `update-check`.
+#[cfg(not(target_os = "macos"))]
+pub fn start(
+    _cx: &mut App,
+    _extension: &Extension,
+    product: Product,
+    _url: &str,
+    _client: Arc<dyn HttpClient>,
+) {
+    tracing::info_span!("update-check", current = product.version).in_scope(|| {
+        tracing::debug!("{NOT_ON_THIS_SYSTEM}");
+    });
+}
+
 /// One check: the request, the version check, and when newer, the install and
 /// its toast, or the toast that it is available.
+#[cfg(target_os = "macos")]
 async fn check(
     cx: &mut AsyncApp,
     extension: &Extension,
@@ -171,6 +207,7 @@ async fn check(
 
 /// Downloads and installs `release` over `bundle` on the background
 /// executor, the download within its time limit; whether it was installed.
+#[cfg(target_os = "macos")]
 async fn install(
     cx: &mut AsyncApp,
     product: Product,
@@ -207,6 +244,7 @@ async fn install(
 
 /// Shows `toast` in the active window, or the first one; whether there was
 /// a window for it.
+#[cfg(target_os = "macos")]
 fn show_toast(cx: &mut AsyncApp, extension: &Extension, toast: yard_ui::Toast) -> bool {
     cx.update(|cx| {
         let Some(window) = cx
@@ -224,6 +262,7 @@ fn show_toast(cx: &mut AsyncApp, extension: &Extension, toast: yard_ui::Toast) -
 }
 
 /// Asks `url` for the release file and reads it.
+#[cfg(target_os = "macos")]
 async fn fetch(client: Arc<dyn HttpClient>, url: String) -> Result<Release, String> {
     let request = Request::get(&url)
         .follow_redirects(RedirectPolicy::NoFollow)
@@ -260,6 +299,7 @@ async fn fetch(client: Arc<dyn HttpClient>, url: String) -> Result<Release, Stri
 
 /// The address's host, which the logs name instead of the address, whose path
 /// or query can hold a token.
+#[cfg(target_os = "macos")]
 pub(super) fn host(url: &str) -> String {
     Url::parse(url)
         .ok()
@@ -269,6 +309,7 @@ pub(super) fn host(url: &str) -> String {
 
 /// `reason` with every address in it, such as one an HTTP error quotes,
 /// replaced by `host`.
+#[cfg(target_os = "macos")]
 pub(super) fn without_addresses(reason: &str, host: &str) -> String {
     let mut text = String::new();
     let mut rest = reason;

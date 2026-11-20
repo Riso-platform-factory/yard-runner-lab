@@ -136,6 +136,39 @@ fn start_update_check(cx: &mut App, product: Product) {
     }
 }
 
+/// The options every window of the product starts from: its title bar, its
+/// `app_id`, which Wayland and X11 match with the product's `.desktop` file,
+/// and on Linux and FreeBSD its X11 icon.
+fn window_options(product: Product) -> WindowOptions {
+    tracing::debug!(app_id = product.identifier, "window options");
+    WindowOptions {
+        titlebar: Some(yard_ui::titlebar_options(product.name)),
+        app_id: Some(product.identifier.to_owned()),
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        icon: app_icon(),
+        ..Default::default()
+    }
+}
+
+/// The product's icon, decoded once from the PNG that `build.rs` sized for
+/// X11, as Zed's window options do.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn app_icon() -> Option<Arc<image::RgbaImage>> {
+    static APP_ICON: std::sync::LazyLock<Option<Arc<image::RgbaImage>>> =
+        std::sync::LazyLock::new(|| {
+            const BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app_icon.png"));
+            match image::load_from_memory_with_format(BYTES, image::ImageFormat::Png) {
+                Ok(image) => Some(Arc::new(image.into_rgba8())),
+                // `build.rs` wrote this PNG, so it not decoding is a bug.
+                Err(error) => {
+                    tracing::error!("the window icon does not decode: {error}");
+                    None
+                }
+            }
+        });
+    APP_ICON.clone()
+}
+
 fn open_window(cx: &mut App, product: Product, window_file: Option<std::path::PathBuf>) {
     let _group = tracing::info_span!("window-open").entered();
     let saved = window_file
@@ -144,10 +177,9 @@ fn open_window(cx: &mut App, product: Product, window_file: Option<std::path::Pa
     let window = cx
         .open_window(
             WindowOptions {
-                titlebar: Some(yard_ui::titlebar_options(product.name)),
                 window_bounds: saved.map(|(bounds, _)| bounds),
                 display_id: saved.map(|(_, display)| display),
-                ..Default::default()
+                ..window_options(product)
             },
             |window, cx| {
                 yard_ui::follow_appearance(window, cx);
@@ -178,10 +210,9 @@ fn open_session_window(
     let window = cx
         .open_window(
             WindowOptions {
-                titlebar: Some(yard_ui::titlebar_options(product.name)),
                 window_bounds: saved.bounds,
                 display_id: saved.display,
-                ..Default::default()
+                ..window_options(product)
             },
             |window, cx| {
                 yard_ui::follow_appearance(window, cx);

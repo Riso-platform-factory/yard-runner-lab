@@ -444,6 +444,7 @@ fn the_configs_under_test_have_different_icons() {
 fn each_bad_config_under_test_is_refused_naming_the_file_and_the_key() {
     for (name, key, reason) in [
         ("bad-missing-name", "name", "must be a non-empty string"),
+        ("bad-name-for-linux", "name", "gives no file name for Linux"),
         ("bad-identifier", "identifier", "at least two labels"),
         ("bad-scheme", "url_scheme", "lowercase ASCII letter"),
         ("bad-icon-not-square", "icon", "is 512 × 256"),

@@ -1,0 +1,7 @@
+# A test input, refused: `name` holds no ASCII letter or digit, so it gives no
+# file name for Linux.
+name = "!!!"
+version = "0.1.0"
+identifier = "test.yard.lab"
+url_scheme = "yardlab"
+icon = "icon.png"

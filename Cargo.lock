@@ -7842,6 +7842,7 @@ dependencies = [
  "command_palette",
  "gpui",
  "gpui_platform",
+ "image",
  "reqwest_client",
  "serde_json",
  "tracing",

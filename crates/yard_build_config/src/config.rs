@@ -74,6 +74,12 @@ fn check(path: &Path) -> Result<BuildConfig, String> {
         Ok(value.to_owned())
     };
     let name = string("name")?;
+    if yard_product::file_name(&name).is_empty() {
+        return Err(format!(
+            "product config {file}: `name` {name:?} gives no file name for Linux: it must hold \
+             at least one ASCII letter or digit"
+        ));
+    }
     tracing::debug!(name, "name");
     let version = string("version")?;
     tracing::debug!(version, "version");
