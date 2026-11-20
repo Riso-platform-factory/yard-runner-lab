@@ -37,12 +37,20 @@ fn writes_the_window_at_the_requested_size() {
         image.pixels().any(|pixel| pixel != first),
         "the PNG is a single colour"
     );
+    // The group ends ✓, or ⚠ when only known errors were logged in it, as
+    // on a Linux runner without a GPU device or a pointer.
     assert!(
-        trace.contains("✓ [app-startup > screenshot-capture{width=320, height=200"),
+        trace.contains("✓ [app-startup > screenshot-capture{width=320, height=200")
+            || trace.contains("⚠ [app-startup > screenshot-capture{width=320, height=200"),
         "{trace}"
     );
     assert!(trace.contains("] written"), "{trace}");
-    assert!(!trace.contains("ERROR"), "{trace}");
+    for line in trace.lines().filter(|line| line.contains(" ERROR ")) {
+        assert!(
+            line.contains("[known: "),
+            "an unknown error: {line}\n{trace}"
+        );
+    }
 }
 
 #[test]
