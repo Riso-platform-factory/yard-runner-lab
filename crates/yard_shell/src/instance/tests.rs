@@ -335,18 +335,39 @@ fn a_listener_that_cannot_start_leaves_no_socket() {
 fn a_full_queue_refuses_the_hand_off_in_time() {
     let home = home();
     fs::create_dir_all(&home.dir).unwrap();
-    // An instance that does not read: its queue fills up.
+    // An instance that does not read: its queue fills up. On Linux one
+    // sender stops at its own send buffer before the receiver's queue
+    // (`max_dgram_qlen`) is full, so fresh senders fill it until a fresh one
+    // cannot send even once: then a new sender waits for the peer
+    // (`unix_wait_for_peer`) until its write timeout.
     let _listener = UnixDatagram::bind(&home.socket).unwrap();
-    let filler = UnixDatagram::unbound().unwrap();
-    filler.connect(&home.socket).unwrap();
-    filler.set_nonblocking(true).unwrap();
-    while filler.send(b"\x01").is_ok() {}
+    let mut fillers = Vec::new();
+    let full = (0..100).any(|_| {
+        let filler = UnixDatagram::unbound().unwrap();
+        filler.connect(&home.socket).unwrap();
+        filler.set_nonblocking(true).unwrap();
+        let mut sent = 0;
+        while filler.send(b"\x01").is_ok() {
+            sent += 1;
+        }
+        fillers.push(filler);
+        sent == 0
+    });
+    assert!(full, "the receiver's queue did not fill up");
     let started = std::time::Instant::now();
     match check_in(&home, &["yard://tour/a"]) {
         Instance::Refused(_) => {}
         other => panic!("a full queue refuses the hand-off: {other:?}"),
     }
-    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    let waited = started.elapsed();
+    assert!(waited < std::time::Duration::from_secs(5), "{waited:?}");
+    // Linux blocks the sender until the timeout; macOS refuses at once.
+    if cfg!(target_os = "linux") {
+        assert!(
+            waited >= std::time::Duration::from_millis(1500),
+            "{waited:?}"
+        );
+    }
 }
 
 #[test]
