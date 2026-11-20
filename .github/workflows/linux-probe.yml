@@ -20,7 +20,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q gcc g++ clang lld cmake pkg-config libasound2-dev libfontconfig-dev \
             libglib2.0-dev libssl-dev libvulkan1 mesa-vulkan-drivers libwayland-dev libx11-xcb-dev \
-            libxkbcommon-x11-dev libzstd-dev libstdc++-12-dev xvfb imagemagick xdotool x11-utils openbox xcompmgr desktop-file-utils
+            libxkbcommon-x11-dev libzstd-dev libstdc++-12-dev xvfb imagemagick xdotool x11-utils openbox xcompmgr xserver-xorg-video-dummy xserver-xorg-core desktop-file-utils
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the production app
@@ -43,10 +43,33 @@ jobs:
         if: steps.build.outcome == 'success'
         continue-on-error: true
         run: |
-          Xvfb :99 -screen 0 1280x800x24 & sleep 2
+          cat > /tmp/dummy.conf <<'CONF'
+          Section "Device"
+            Identifier "dummy"
+            Driver "dummy"
+            VideoRam 256000
+          EndSection
+          Section "Monitor"
+            Identifier "monitor"
+            HorizSync 5.0-1000.0
+            VertRefresh 5.0-200.0
+            Modeline "1280x800" 83.50 1280 1352 1480 1680 800 803 809 831
+          EndSection
+          Section "Screen"
+            Identifier "screen"
+            Device "dummy"
+            Monitor "monitor"
+            DefaultDepth 24
+            SubSection "Display"
+              Depth 24
+              Modes "1280x800"
+            EndSubSection
+          EndSection
+          CONF
+          sed -i 's/^          //' /tmp/dummy.conf
+          sudo Xorg :99 -noreset -nolisten tcp -config /tmp/dummy.conf -logfile /tmp/xorg.log & sleep 3
           export DISPLAY=:99
           openbox & sleep 2
-          xcompmgr & sleep 1
           env -u YARD_HOME YARD_LIFECYCLE=info,yard=debug target/debug/yard > app.log 2>&1 & sleep 15
           WID=$(xdotool search --classname vn.risotech.yard | head -1)
           echo "window $WID" > windows.txt
@@ -71,4 +94,5 @@ jobs:
             no_lifecycle_trace.log
             screenshot.png
             window.png
+            /tmp/xorg.log
           if-no-files-found: ignore
