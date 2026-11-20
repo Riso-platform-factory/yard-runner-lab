@@ -20,8 +20,12 @@ dev = [
 gpui = { workspace = true }
 yard_product = { workspace = true, default-features = false }
 yard_shell = { workspace = true, default-features = false }
-yard_ui = { workspace = true, default-features = false }
 http_client = { workspace = true }
+tracing = { workspace = true }
+
+# The check and the install run only on macOS yet.
+[target.'cfg(target_os = "macos")'.dependencies]
+yard_ui = { workspace = true, default-features = false }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -30,8 +34,9 @@ tempfile = { workspace = true }
 libc = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 http_client = { workspace = true, features = ["test-support"] }
+yard_ui = { workspace = true, default-features = false }
+futures = { workspace = true }

@@ -61,7 +61,7 @@
 <tr><td>URL scheme</td><td>File <code>.desktop</code> khai báo <code>x-scheme-handler/&lt;scheme&gt;</code></td><td>Bộ cài ghi registry <code>HKCU\Software\Classes\&lt;scheme&gt;</code></td></tr>
 <tr><td>Chỉ một phiên bản</td><td>Socket trong thư mục dữ liệu</td><td>Mutex và named pipe, tên lấy từ identifier</td></tr>
 <tr><td>Mở URL khi app đang chạy</td><td colspan="2">Lần chạy thứ hai chuyển URL cho app đang chạy rồi thoát. URL tới đúng extension, như <code>on_open_url</code> trên macOS</td></tr>
-<tr><td>Thư mục</td><td>XDG: <code>~/.config</code>, <code>~/.local/share</code>…</td><td><code>%APPDATA%</code>, <code>%LOCALAPPDATA%</code></td></tr>
+<tr><td>Thư mục</td><td>XDG: <code>~/.config/&lt;tên&gt;</code>, <code>~/.local/share/&lt;tên&gt;</code>, log trong <code>&lt;data&gt;/logs</code>. <code>&lt;tên&gt;</code> viết thường, khoảng trắng thành <code>-</code> như Zed dùng <code>zed</code>: <code>Lab Notes Pro</code> → <code>lab-notes-pro</code> (cả binary, file <code>.tar.gz</code>, socket)</td><td><code>%APPDATA%</code>, <code>%LOCALAPPDATA%</code></td></tr>
 <tr><td>Tự cập nhật</td><td colspan="2">Chưa có; để tới lát <code>release-updates</code></td></tr>
 </table>
 <p class="src">Khác Zed ở hai chỗ, đều có lý do. YARD không làm binary CLI riêng; app tự chuyển tham số cho phiên bản đang chạy. Tên mutex lấy từ một hàm dùng chung cho cả app lẫn bộ cài; bộ cài của Zed khai báo tên khác với tên app dùng.</p>
@@ -89,10 +89,16 @@
 
 <h2>Thứ tự trong lát, mỗi phần duyệt riêng</h2>
 <ol>
-<li><code>yard_build_config</code>; <code>build.rs</code> đọc cấu hình qua crate này.</li>
-<li><code>cargo xtask bundle macos</code> thay <code>script/bundle-macos</code>.</li>
-<li>Ký, notarize và DMG trên macOS.</li>
-<li>App chạy trên Linux, rồi <code>bundle linux</code>.</li>
+<li><code>yard_build_config</code>; <code>build.rs</code> đọc cấu hình qua crate này. <span style="color:var(--ok)">Đã duyệt, production.</span></li>
+<li><code>cargo xtask bundle macos</code> thay <code>script/bundle-macos</code>. <span style="color:var(--ok)">Đã duyệt.</span></li>
+<li>Ký, notarize và DMG trên macOS. <span style="color:var(--ok)">Đã duyệt.</span></li>
+<li>App chạy trên Linux, rồi <code>bundle linux</code>. <span style="color:var(--warn)">Đang làm</span>, chia bốn lần duyệt:
+  <ol type="a">
+  <li>Build và chạy được trên Linux: <code>yard_update</code> chỉ chạy trên macOS, cửa sổ có <code>app_id</code> và icon X11, thư mục XDG. <span style="color:var(--warn)">Đang kiểm trên runner.</span></li>
+  <li>Nút cửa sổ và viền kéo đổi cỡ tự vẽ, như Zed.</li>
+  <li>Chỉ một phiên bản; URL tới app đang chạy.</li>
+  <li><code>cargo xtask bundle linux</code>: <code>.tar.gz</code>, <code>.desktop</code>, icon, <code>install.sh</code>.</li>
+  </ol></li>
 <li>App chạy trên Windows, rồi <code>bundle windows</code>, kèm ký code Windows.</li>
 <li>Kiểm trên runner trong repo nháp.</li>
 </ol>
