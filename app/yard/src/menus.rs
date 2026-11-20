@@ -1,6 +1,6 @@
 use gpui::{Menu, MenuItem};
 
-pub(crate) fn menus(product: &yard_product::Product) -> Vec<Menu> {
+pub fn menus(product: &yard_product::Product) -> Vec<Menu> {
     vec![
         Menu::new(product.name).items(vec![MenuItem::action(
             format!("Quit {}", product.name),

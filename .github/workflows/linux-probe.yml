@@ -81,6 +81,12 @@ jobs:
           sleep 3; import -window root screenshot-later.png
           ls -R ~/.config/yard ~/.local/share/yard > dirs.txt 2>&1 || true
           pkill -f target/debug/yard || true
+      - name: Headless screenshot of the production window
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          env -u YARD_HOME YARD_LIFECYCLE=info,screenshot=debug cargo run -p screenshot -- --out headless.png 2>&1 | tee headless.log
+          cargo test -p screenshot -- --ignored 2>&1 | tail -5 | tee headless-test.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -96,6 +102,9 @@ jobs:
             no_lifecycle_trace.log
             screenshot.png
             window.png
+            headless.png
+            headless.log
+            headless-test.log
             screenshot-later.png
             /tmp/xorg.log
           if-no-files-found: ignore

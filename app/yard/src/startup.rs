@@ -1,32 +1,35 @@
 use gpui::{App, AsyncApp, WindowOptions};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-type Init = fn(&mut App, &yard_shell::Extension);
+/// What an extension registers when the application starts.
+pub type Init = fn(&mut App, &yard_shell::Extension);
 
 use yard_product::Product;
 
+/// The product, from the build config.
+pub const PRODUCT: Product = Product {
+    name: env!("PRODUCT_NAME"),
+    version: env!("PRODUCT_VERSION"),
+    identifier: env!("PRODUCT_IDENTIFIER"),
+};
+
+/// The extensions that come with the application.
+pub const EXTENSIONS: &[(&str, Init)] = &[("command_palette", command_palette::init)];
+
+/// The URLs the system hands over, kept until the app can open them.
 #[derive(Default)]
-struct OpenUrls {
+pub struct OpenUrls {
     app: Option<AsyncApp>,
     early: Vec<Vec<String>>,
 }
 
 /// Runs the application with the product's identifier in the logs.
-pub(crate) fn run(
+pub fn run(
     product: Product,
     extensions: &[(&'static str, Init)],
     menus: fn(&Product) -> Vec<gpui::Menu>,
 ) {
-    // The logs start from the build values as they are, since `start` needs
-    // the product; the product is then checked once the trace listens, so
-    // its `product` group shows in `app-startup`.
-    yard_log::start(product);
-    let product = Product::new(product.name, product.version, product.identifier);
-    let paths = yard_paths::Paths::from_env(&product);
-    {
-        let _group = tracing::info_span!("logs-prepare").entered();
-        yard_log::open_files(paths.logs_dir());
-    }
+    let (product, paths) = start_logs(product);
     let extensions = extensions.to_vec();
     let app = gpui_platform::application().with_assets(yard_ui::Assets);
     let open_urls = Rc::new(RefCell::new(OpenUrls::default()));
@@ -45,62 +48,7 @@ pub(crate) fn run(
         }
     });
     app.run(move |cx: &mut App| {
-        {
-            let _group = tracing::info_span!("app-init").entered();
-            yard_log::init_app(cx);
-            yard_settings::init(cx);
-            yard_settings::load(cx, paths.settings_file());
-            yard_settings::watch(cx);
-            yard_ui::init(cx);
-            yard_ui::load_user_themes(cx, &paths.themes_dir());
-            yard_ui::apply_theme_setting(cx);
-            yard_shell::set_window_title(cx, product.name);
-            yard_shell::set_url_scheme(cx, env!("PRODUCT_URL_SCHEME"));
-            yard_shell::set_layout_file(cx, paths.layout_file());
-            yard_shell::set_state_file(cx, paths.state_file());
-            yard_shell::set_store_dir(cx, paths.store_dir());
-            let named_paths = paths.clone();
-            yard_shell::set_named_layout_files(cx, move |name| named_paths.named_layout_file(name));
-            yard_shell::bind_default_keys(cx);
-            yard_ui::bind_text_input_keys(cx);
-            yard_shell::handle_quit(cx);
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
-        }
-        let early_urls = std::mem::take(&mut open_urls.borrow_mut().early);
-        for urls in early_urls {
-            yard_shell::open_urls(cx, urls);
-        }
-        {
-            let _group = tracing::info_span!("extensions-load", count = extensions.len()).entered();
-            for (name, init) in extensions {
-                let _group = tracing::info_span!("extension-init", extension = name).entered();
-                if let Some(extension) = yard_shell::Extension::new(cx, name) {
-                    init(cx, &extension);
-                }
-            }
-        }
-        // Hand over any URLs that arrived during extension initialization.
-        // GPUI queues subsequent deliveries on the main thread in callback order.
-        let early_urls = {
-            let mut listener = open_urls.borrow_mut();
-            listener.app = Some(cx.to_async());
-            std::mem::take(&mut listener.early)
-        };
-        for urls in early_urls {
-            yard_shell::open_urls(cx, urls);
-        }
-        yard_shell::extensions_loaded(cx);
-        yard_keymap::load_user_keymap(cx, &paths.keymap_file());
-        yard_keymap::watch_user_keymap(cx, paths.keymap_file());
-        yard_shell::set_menus(cx, menus(&product));
-        yard_shell::set_window_opener(cx, move |cx| {
-            open_window(cx, product, None);
-        });
+        init(cx, product, &paths, &extensions, menus, &open_urls);
         let session = yard_shell::saved_session(cx, &paths.session_file());
         yard_shell::track_session(cx, paths.session_file());
         match session {
@@ -110,10 +58,96 @@ pub(crate) fn run(
                     open_session_window(cx, product, saved, window_file);
                 }
             }
-            None => open_window(cx, product, Some(paths.window_file())),
+            None => {
+                open_window(cx, product, Some(paths.window_file()), None);
+            }
         }
         start_update_check(cx, product);
         yard_log::startup_finished();
+    });
+}
+
+/// Starts both logs and opens their files in the product's logs directory,
+/// and returns the checked product with its directories.
+pub fn start_logs(product: Product) -> (Product, yard_paths::Paths) {
+    // The logs start from the build values as they are, since `start` needs
+    // the product; the product is then checked once the trace listens, so
+    // its `product` group shows in `app-startup`.
+    yard_log::start(product);
+    let product = Product::new(product.name, product.version, product.identifier);
+    let paths = yard_paths::Paths::from_env(&product);
+    {
+        let _group = tracing::info_span!("logs-prepare").entered();
+        yard_log::open_files(paths.logs_dir());
+    }
+    (product, paths)
+}
+
+/// Sets up the app as the application does before it opens a window: the
+/// settings, the theme, the shell, the extensions, the keymap, and the menus.
+pub fn init(
+    cx: &mut App,
+    product: Product,
+    paths: &yard_paths::Paths,
+    extensions: &[(&'static str, Init)],
+    menus: fn(&Product) -> Vec<gpui::Menu>,
+    open_urls: &RefCell<OpenUrls>,
+) {
+    {
+        let _group = tracing::info_span!("app-init").entered();
+        yard_log::init_app(cx);
+        yard_settings::init(cx);
+        yard_settings::load(cx, paths.settings_file());
+        yard_settings::watch(cx);
+        yard_ui::init(cx);
+        yard_ui::load_user_themes(cx, &paths.themes_dir());
+        yard_ui::apply_theme_setting(cx);
+        yard_shell::set_window_title(cx, product.name);
+        yard_shell::set_url_scheme(cx, env!("PRODUCT_URL_SCHEME"));
+        yard_shell::set_layout_file(cx, paths.layout_file());
+        yard_shell::set_state_file(cx, paths.state_file());
+        yard_shell::set_store_dir(cx, paths.store_dir());
+        let named_paths = paths.clone();
+        yard_shell::set_named_layout_files(cx, move |name| named_paths.named_layout_file(name));
+        yard_shell::bind_default_keys(cx);
+        yard_ui::bind_text_input_keys(cx);
+        yard_shell::handle_quit(cx);
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+    }
+    let early_urls = std::mem::take(&mut open_urls.borrow_mut().early);
+    for urls in early_urls {
+        yard_shell::open_urls(cx, urls);
+    }
+    {
+        let _group = tracing::info_span!("extensions-load", count = extensions.len()).entered();
+        for &(name, init) in extensions {
+            let _group = tracing::info_span!("extension-init", extension = name).entered();
+            if let Some(extension) = yard_shell::Extension::new(cx, name) {
+                init(cx, &extension);
+            }
+        }
+    }
+    // Hand over any URLs that arrived during extension initialization.
+    // GPUI queues subsequent deliveries on the main thread in callback order.
+    let early_urls = {
+        let mut listener = open_urls.borrow_mut();
+        listener.app = Some(cx.to_async());
+        std::mem::take(&mut listener.early)
+    };
+    for urls in early_urls {
+        yard_shell::open_urls(cx, urls);
+    }
+    yard_shell::extensions_loaded(cx);
+    yard_keymap::load_user_keymap(cx, &paths.keymap_file());
+    yard_keymap::watch_user_keymap(cx, paths.keymap_file());
+    yard_shell::set_menus(cx, menus(&product));
+    yard_shell::set_window_opener(cx, move |cx| {
+        open_window(cx, product, None, None);
     });
 }
 
@@ -139,7 +173,7 @@ fn start_update_check(cx: &mut App, product: Product) {
 /// The options every window of the product starts from: its title bar, its
 /// `app_id`, which Wayland and X11 match with the product's `.desktop` file,
 /// and on Linux and FreeBSD its X11 icon.
-fn window_options(product: Product) -> WindowOptions {
+pub fn window_options(product: Product) -> WindowOptions {
     tracing::debug!(app_id = product.identifier, "window options");
     WindowOptions {
         titlebar: Some(yard_ui::titlebar_options(product.name)),
@@ -166,7 +200,14 @@ fn app_icon() -> Option<Arc<image::RgbaImage>> {
     .clone()
 }
 
-fn open_window(cx: &mut App, product: Product, window_file: Option<std::path::PathBuf>) {
+/// Opens a window of the product at `bounds`, or else at the bounds saved in
+/// `window_file`, which it then keeps up to date.
+pub fn open_window(
+    cx: &mut App,
+    product: Product,
+    window_file: Option<std::path::PathBuf>,
+    bounds: Option<gpui::WindowBounds>,
+) -> gpui::AnyWindowHandle {
     let _group = tracing::info_span!("window-open").entered();
     let saved = window_file
         .as_ref()
@@ -174,7 +215,7 @@ fn open_window(cx: &mut App, product: Product, window_file: Option<std::path::Pa
     let window = cx
         .open_window(
             WindowOptions {
-                window_bounds: saved.map(|(bounds, _)| bounds),
+                window_bounds: bounds.or(saved.map(|(bounds, _)| bounds)),
                 display_id: saved.map(|(_, display)| display),
                 ..window_options(product)
             },
@@ -193,6 +234,7 @@ fn open_window(cx: &mut App, product: Product, window_file: Option<std::path::Pa
         })
         .unwrap_or_else(|error| panic!("{} window is open: {error}", product.name));
     cx.activate(true);
+    window.into()
 }
 
 /// Opens a window of the saved session with its bounds and layers; the
