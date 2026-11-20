@@ -68,3 +68,18 @@ fn a_tiled_edge_does_not_resize() {
         );
     }
 }
+
+#[test]
+fn the_window_background_is_transparent_only_on_linux() {
+    let mut cx = gpui::HeadlessAppContext::with_asset_source(
+        std::sync::Arc::new(gpui::NoopTextSystem),
+        std::sync::Arc::new(crate::Assets),
+    );
+    cx.update(crate::init);
+    let background = cx.update(|cx| window_background(cx));
+    if Platform::CURRENT == Platform::Linux {
+        assert_eq!(background, WindowBackgroundAppearance::Transparent);
+    } else {
+        assert_eq!(background, WindowBackgroundAppearance::Opaque);
+    }
+}

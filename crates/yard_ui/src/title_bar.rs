@@ -103,6 +103,7 @@ impl RenderOnce for TitleBar {
                         up.update(cx, |state, _| *state = false)
                     })
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        tracing::trace!("title bar pressed, a move starts on the next mouse move");
                         down.update(cx, |state, _| *state = true)
                     })
                     .on_mouse_move(move |_, window, cx| {

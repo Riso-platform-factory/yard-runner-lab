@@ -70,7 +70,7 @@ jobs:
           sudo Xorg :99 -noreset -nolisten tcp -config /tmp/dummy.conf -logfile /tmp/xorg.log & sleep 3
           export DISPLAY=:99
           dbus-launch xfwm4 --compositor=on --replace > xfwm4.log 2>&1 & sleep 3
-          env -u YARD_HOME YARD_LIFECYCLE=info,yard=debug,yard_ui=debug target/debug/yard > app.log 2>&1 & sleep 15
+          env -u YARD_HOME YARD_LIFECYCLE=info,yard=debug,yard_ui=trace target/debug/yard > app.log 2>&1 & sleep 15
           WID=$(xdotool search --classname vn.risotech.yard | head -1)
           echo "window $WID" > windows.txt
           xprop -id "$WID" WM_CLASS _NET_WM_NAME >> windows.txt 2>&1 || true

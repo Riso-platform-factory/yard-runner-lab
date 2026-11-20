@@ -61,6 +61,16 @@ impl RenderOnce for StatusBar {
                     // The bar covers the frame's border, so that the rounded
                     // corners leave no gap.
                     .mb(px(-1.))
+                    .mt({
+                        // On Wayland at a fractional scale, a 1px gap shows
+                        // above the bar; a negative margin closes it, as in Zed.
+                        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                        let needs_gap_fix =
+                            gpui::guess_compositor() == "Wayland" && window.scale_factor() != 1.0;
+                        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+                        let needs_gap_fix = false;
+                        if needs_gap_fix { px(-1.) } else { px(0.) }
+                    })
                     .border_b(px(1.))
                     .border_color(background),
             })

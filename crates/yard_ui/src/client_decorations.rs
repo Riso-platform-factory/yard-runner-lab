@@ -2,12 +2,12 @@
 //! ddb90e5e89d346f21847281727e1644b8bb2cc37, licensed GPL-3.0-or-later.
 //! Copyright Zed Industries, Inc.
 
-use crate::WindowControlAction;
+use crate::{Platform, WindowControlAction};
 use gpui::{
     App, Bounds, Corners, CursorStyle, Decorations, Div, Global, HitboxBehavior, Hsla,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point, ResizeEdge,
-    Stateful, Styled, Tiling, Window, canvas, div, point, prelude::FluentBuilder, px, size,
-    transparent_black,
+    Stateful, Styled, Tiling, Window, WindowBackgroundAppearance, canvas, div, point,
+    prelude::FluentBuilder, px, size, transparent_black,
 };
 use theme::{
     ActiveTheme, CLIENT_SIDE_DECORATION_BORDER, CLIENT_SIDE_DECORATION_ROUNDING,
@@ -17,6 +17,21 @@ use theme::{
 struct ShownResizeEdge(ResizeEdge);
 
 impl Global for ShownResizeEdge {}
+
+/// The background a window asks of the platform. On Linux it is never
+/// opaque, so that the shadow and the rounded corners YARD draws around the
+/// window show what is behind it: GPUI does the same for every
+/// client-decorated window on Wayland, and Zed asks it for its own
+/// client-decorated windows. Elsewhere it stays opaque.
+pub fn window_background(cx: &App) -> WindowBackgroundAppearance {
+    match cx.theme().window_background_appearance() {
+        WindowBackgroundAppearance::Opaque if Platform::CURRENT == Platform::Linux => {
+            WindowBackgroundAppearance::Transparent
+        }
+        appearance if Platform::CURRENT == Platform::Linux => appearance,
+        _ => WindowBackgroundAppearance::Opaque,
+    }
+}
 
 /// Wraps a window's root. With client decorations it draws the window's
 /// frame, as Zed does: a shadow and rounded corners on the edges that are not

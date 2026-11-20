@@ -22,9 +22,12 @@ click $((WIDTH/2)) 27 2; say "after double-click: state=[$(state)]"
 eval $(xdotool getwindowgeometry --shell "$WID")
 click $((WIDTH/2)) 16 2; say "after second double-click: state=[$(state)]"
 eval $(xdotool getwindowgeometry --shell "$WID")
-# Move by dragging the title bar.
+# Move by dragging the title bar: activate, press, then several small steps.
 before="$(geom)"
-xdotool mousemove --window "$WID" 300 27 mousedown 1 sleep 0.3 mousemove_relative --sync 120 80 sleep 0.3 mouseup 1; sleep 1.5
+xdotool windowactivate --sync "$WID" 2>/dev/null; sleep 0.5
+xdotool mousemove --window "$WID" 300 27; sleep 0.3; xdotool mousedown 1; sleep 0.3
+for i in 1 2 3 4 5 6; do xdotool mousemove --window "$WID" $((300+i*20)) $((27+i*12)); sleep 0.1; done
+sleep 0.3; xdotool mouseup 1; sleep 1.5
 say "move: before [$before] after [$(geom)]"
 eval $(xdotool getwindowgeometry --shell "$WID")
 # Resize by dragging the right edge.

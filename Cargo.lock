@@ -7867,6 +7867,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+ "ui_gallery",
  "yard_build_config",
  "yard_keymap",
  "yard_layout",

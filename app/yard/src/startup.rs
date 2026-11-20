@@ -173,10 +173,12 @@ fn start_update_check(cx: &mut App, product: Product) {
 /// The options every window of the product starts from: its title bar, its
 /// `app_id`, which Wayland and X11 match with the product's `.desktop` file,
 /// and on Linux and FreeBSD its X11 icon.
-pub fn window_options(product: Product) -> WindowOptions {
-    tracing::debug!(app_id = product.identifier, "window options");
+pub fn window_options(product: Product, cx: &App) -> WindowOptions {
+    let window_background = yard_ui::window_background(cx);
+    tracing::debug!(app_id = product.identifier, background = ?window_background, "window options");
     WindowOptions {
         titlebar: Some(yard_ui::titlebar_options(product.name)),
+        window_background,
         app_id: Some(product.identifier.to_owned()),
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         icon: app_icon(),
@@ -215,12 +217,13 @@ pub fn open_window(
     let saved = window_file
         .as_ref()
         .and_then(|file| yard_shell::saved_window_bounds(cx, file));
+    let options = window_options(product, cx);
     let window = cx
         .open_window(
             WindowOptions {
                 window_bounds: bounds.or(saved.map(|(bounds, _)| bounds)),
                 display_id: saved.map(|(_, display)| display),
-                ..window_options(product)
+                ..options
             },
             |window, cx| {
                 yard_ui::follow_appearance(window, cx);
@@ -249,12 +252,13 @@ fn open_session_window(
     window_file: Option<std::path::PathBuf>,
 ) {
     let _group = tracing::info_span!("window-open").entered();
+    let options = window_options(product, cx);
     let window = cx
         .open_window(
             WindowOptions {
                 window_bounds: saved.bounds,
                 display_id: saved.display,
-                ..window_options(product)
+                ..options
             },
             |window, cx| {
                 yard_ui::follow_appearance(window, cx);
