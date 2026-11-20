@@ -19,7 +19,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q gcc g++ clang lld cmake pkg-config libasound2-dev libfontconfig-dev \
-            libglib2.0-dev libssl-dev libvulkan1 mesa-vulkan-drivers libwayland-dev libx11-xcb-dev \
+            libglib2.0-dev libssl-dev libvulkan1 mesa-vulkan-drivers libegl1 libegl-mesa0 libgl1-mesa-dri libwayland-dev libx11-xcb-dev \
             libxkbcommon-x11-dev libzstd-dev libstdc++-12-dev xvfb imagemagick xdotool x11-utils openbox xcompmgr xserver-xorg-video-dummy xserver-xorg-core desktop-file-utils
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
