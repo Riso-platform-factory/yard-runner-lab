@@ -8,19 +8,19 @@
   },
   "yard/menus": {
     "files": {
-      "app/yard/src/menus.rs": "c0def53a5a042b72"
+      "app/yard/src/menus.rs": "c3d9a289eb2bc0dc"
     },
-    "promoted": "2026-11-19"
+    "promoted": "2026-11-20"
   },
   "yard/startup": {
     "files": {
-      "app/yard/src/startup.rs": "e3b96933b2cd9bed"
+      "app/yard/src/startup.rs": "73a80fd91147ac93"
     },
-    "promoted": "2026-11-19"
+    "promoted": "2026-11-20"
   },
   "yard_build_config/config": {
     "files": {
-      "crates/yard_build_config/src/config.rs": "6927c65d6fd85f3b",
+      "crates/yard_build_config/src/config.rs": "a6452f32ae2594c0",
       "crates/yard_build_config/src/config/release.rs": "0005422873355742"
     },
     "promoted": "2026-11-20"
@@ -57,25 +57,25 @@
   },
   "yard_log/diagnostic_log": {
     "files": {
-      "crates/yard_log/src/diagnostic_log.rs": "a4e1548a3a18409c"
+      "crates/yard_log/src/diagnostic_log.rs": "2fa2fc4807c24f96"
     },
-    "promoted": "2026-11-19"
+    "promoted": "2026-11-20"
   },
   "yard_log/lifecycle_trace": {
     "files": {
       "crates/yard_log/src/lifecycle_trace.rs": "b4c19d1735171ed0",
-      "crates/yard_log/src/lifecycle_trace/known_errors.rs": "c015cb918d362274",
+      "crates/yard_log/src/lifecycle_trace/known_errors.rs": "700691540851003e",
       "crates/yard_log/src/lifecycle_trace/lifecycle.rs": "34ed85f497f06ca7",
       "crates/yard_log/src/lifecycle_trace/record.rs": "ea754fdee914644c",
       "crates/yard_log/src/lifecycle_trace/writer.rs": "436e091b6110dd08"
     },
-    "promoted": "2026-11-18"
+    "promoted": "2026-11-20"
   },
   "yard_paths/directories": {
     "files": {
-      "crates/yard_paths/src/directories.rs": "07fb9c7e67e83127"
+      "crates/yard_paths/src/directories.rs": "7fe9e24937e175e6"
     },
-    "promoted": "2026-11-19"
+    "promoted": "2026-11-20"
   },
   "yard_paths/file_check": {
     "files": {
@@ -145,7 +145,7 @@
   },
   "yard_product/product": {
     "files": {
-      "crates/yard_product/src/product.rs": "8db5c4ce247c449d"
+      "crates/yard_product/src/product.rs": "0184f89622e6d535"
     },
     "promoted": "2026-11-20"
   },
@@ -334,14 +334,14 @@
   },
   "yard_update/check": {
     "files": {
-      "crates/yard_update/src/check.rs": "4a49a5fa19444e3f"
+      "crates/yard_update/src/check.rs": "00fffd38c49eeca1"
     },
-    "promoted": "2026-11-19"
+    "promoted": "2026-11-20"
   },
   "yard_update/install": {
     "files": {
-      "crates/yard_update/src/install.rs": "7dfefd5c3a3a152a"
+      "crates/yard_update/src/install.rs": "a65a0c90b6fe7cdc"
     },
-    "promoted": "2026-11-19"
+    "promoted": "2026-11-20"
   }
 }

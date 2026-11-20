@@ -2,6 +2,7 @@ mod key_hint;
 mod scroll;
 mod text_input;
 mod tooltip;
+mod window_controls;
 
 use gpui::{
     App, AppContext, Context, Div, IntoElement, ParentElement, Render, Styled, Window, div, rems,
@@ -60,7 +61,7 @@ pub fn init(cx: &mut App, ext: &yard_shell::Extension) {
     }
     match case.as_str() {
         "all" => {
-            let pages = 10;
+            let pages = 11;
             let _group = tracing::info_span!("gallery-build", pages).entered();
             ext.register(cx, "ui_gallery.text", &[], |_, _, _, cx| {
                 cx.new(|_| TextPage).into()
@@ -88,6 +89,7 @@ pub fn init(cx: &mut App, ext: &yard_shell::Extension) {
             scroll::register(cx, ext);
             key_hint::register(cx, ext);
             tooltip::register(cx, ext);
+            window_controls::register(cx, ext);
             ext.place_root(cx, "root", "yard.tabs");
             ext.place(cx, "text", "ui_gallery.text", "root", "children");
             tracing::debug!(page = "text", "page placed");
@@ -119,8 +121,14 @@ pub fn init(cx: &mut App, ext: &yard_shell::Extension) {
             }
             key_hint::place(cx, ext);
             tooltip::place(cx, ext);
+            window_controls::place(cx, ext);
         }
-        _ => log::warn!("unknown UI_GALLERY case {case:?}; known cases: all"),
+        "window-controls" => {
+            let _group = tracing::info_span!("gallery-build", pages = 1).entered();
+            window_controls::register(cx, ext);
+            window_controls::place_alone(cx, ext);
+        }
+        _ => log::warn!("unknown UI_GALLERY case {case:?}; known cases: all, window-controls"),
     }
 }
 

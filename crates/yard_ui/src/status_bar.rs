@@ -4,10 +4,10 @@
 
 use crate::h_flex;
 use gpui::{
-    AnyElement, App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Styled,
-    Window,
+    AnyElement, App, Decorations, ElementId, InteractiveElement, IntoElement, ParentElement,
+    RenderOnce, Styled, Window, prelude::FluentBuilder, px,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING};
 use ui::DynamicSpacing;
 
 /// A status bar with ordered left and right item groups.
@@ -39,7 +39,8 @@ impl StatusBar {
 }
 
 impl RenderOnce for StatusBar {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let background = cx.theme().colors().status_bar_background;
         h_flex()
             .id(self.id)
             .w_full()
@@ -47,7 +48,22 @@ impl RenderOnce for StatusBar {
             .justify_between()
             .gap(DynamicSpacing::Base08.rems(cx))
             .p(DynamicSpacing::Base04.rems(cx))
-            .bg(cx.theme().colors().status_bar_background)
+            .bg(background)
+            .map(|bar| match window.window_decorations() {
+                Decorations::Server => bar,
+                Decorations::Client { tiling } => bar
+                    .when(!(tiling.bottom || tiling.right), |bar| {
+                        bar.rounded_br(CLIENT_SIDE_DECORATION_ROUNDING)
+                    })
+                    .when(!(tiling.bottom || tiling.left), |bar| {
+                        bar.rounded_bl(CLIENT_SIDE_DECORATION_ROUNDING)
+                    })
+                    // The bar covers the frame's border, so that the rounded
+                    // corners leave no gap.
+                    .mb(px(-1.))
+                    .border_b(px(1.))
+                    .border_color(background),
+            })
             .child(
                 h_flex()
                     .gap_1()

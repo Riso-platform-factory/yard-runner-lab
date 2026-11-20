@@ -2,6 +2,7 @@
 
 mod axis;
 mod button;
+mod client_decorations;
 mod divider;
 mod icon;
 mod key_hint;
@@ -22,8 +23,10 @@ mod title_bar;
 mod toast_layer;
 mod tooltip;
 mod user_themes;
+mod window_controls;
 pub use axis::*;
 pub use button::*;
+pub use client_decorations::*;
 pub use divider::*;
 pub use icon::*;
 pub use key_hint::*;
@@ -44,3 +47,4 @@ pub use title_bar::*;
 pub use toast_layer::*;
 pub use tooltip::*;
 pub use user_themes::*;
+pub use window_controls::*;

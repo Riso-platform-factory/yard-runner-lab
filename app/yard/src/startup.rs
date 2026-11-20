@@ -180,6 +180,9 @@ pub fn window_options(product: Product) -> WindowOptions {
         app_id: Some(product.identifier.to_owned()),
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         icon: app_icon(),
+        // YARD draws its own frame and controls on Linux, as Zed does.
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        window_decorations: Some(gpui::WindowDecorations::Client),
         ..Default::default()
     }
 }

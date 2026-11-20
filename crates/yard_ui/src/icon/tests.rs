@@ -3,11 +3,15 @@ use crate::{TextColor, v_flex};
 use gpui::{AppContext, AssetSource, IntoElement, ParentElement};
 use std::sync::Arc;
 
-const PATHS: [(IconName, &str); 8] = [
+const PATHS: [(IconName, &str); 12] = [
     (IconName::Check, "icons/check.svg"),
     (IconName::ChevronDown, "icons/chevron_down.svg"),
     (IconName::ChevronRight, "icons/chevron_right.svg"),
     (IconName::Close, "icons/close.svg"),
+    (IconName::GenericClose, "icons/generic_close.svg"),
+    (IconName::GenericMaximize, "icons/generic_maximize.svg"),
+    (IconName::GenericMinimize, "icons/generic_minimize.svg"),
+    (IconName::GenericRestore, "icons/generic_restore.svg"),
     (IconName::Info, "icons/info.svg"),
     (IconName::Plus, "icons/plus.svg"),
     (IconName::Warning, "icons/warning.svg"),

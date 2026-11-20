@@ -5311,6 +5311,7 @@ dependencies = [
  "image",
  "tempfile",
  "tracing",
+ "ui_gallery",
  "yard",
  "yard_log",
  "yard_paths",

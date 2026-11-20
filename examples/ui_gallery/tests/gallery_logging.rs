@@ -133,6 +133,7 @@ fn gallery_builds_its_pages_and_logs_per_case(cx: &mut TestAppContext) {
         run_child(None);
         run_child(Some(""));
         run_child(Some("all"));
+        run_child(Some("window-controls"));
         run_child(Some("unknown"));
         return;
     };
@@ -169,6 +170,7 @@ fn gallery_builds_its_pages_and_logs_per_case(cx: &mut TestAppContext) {
             "TAB-scroll",
             "TAB-key-hint",
             "TAB-tooltip",
+            "TAB-window-controls",
         ];
         for &selector in selectors {
             let bounds = match visual.debug_bounds(selector) {
@@ -220,6 +222,7 @@ fn gallery_builds_its_pages_and_logs_per_case(cx: &mut TestAppContext) {
                 "scroll",
                 "key-hint",
                 "tooltip",
+                "window-controls",
             ];
             let expected_span = format!("gallery-build pages={}", expected_pages.len());
             assert!(
@@ -253,6 +256,35 @@ fn gallery_builds_its_pages_and_logs_per_case(cx: &mut TestAppContext) {
                     captured.lines
                 );
             }
+            assert!(
+                diagnostics.is_empty(),
+                "unexpected diagnostics: {diagnostics:?}"
+            );
+        }
+        "window-controls" => {
+            let expected_span = "gallery-build pages=1";
+            let build_lines: Vec<_> = captured
+                .lines
+                .iter()
+                .filter(|line| !line.contains(": TRACE "))
+                .cloned()
+                .collect();
+            assert_eq!(
+                build_lines,
+                vec![format!(
+                    "{expected_span}: DEBUG message=page placed page=window-controls"
+                )],
+                "unexpected non-trace lines: {:?}",
+                captured.lines
+            );
+            assert!(
+                captured
+                    .lines
+                    .iter()
+                    .any(|line| line.contains(": TRACE") && line.contains("page=window-controls")),
+                "expected the page's render trace in {:?}",
+                captured.lines
+            );
             assert!(
                 diagnostics.is_empty(),
                 "unexpected diagnostics: {diagnostics:?}"

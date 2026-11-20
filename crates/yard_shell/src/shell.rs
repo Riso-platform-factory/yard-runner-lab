@@ -8267,7 +8267,8 @@ impl Render for Shell {
         for attach in action_handlers {
             root = attach(root);
         }
-        root.id("shell")
+        let root = root
+            .id("shell")
             .key_context("Shell")
             .track_focus(&self.handle)
             .on_action(|_: &NewWindow, _, cx| {
@@ -8325,7 +8326,6 @@ impl Render for Shell {
             .grid()
             .grid_cols(1)
             .grid_rows(1)
-            .bg(yard_ui::palette(cx).background)
             .font(yard_ui::ui_font(cx))
             .on_drop::<DraggedNode>(|dragged, window, cx| {
                 let _window_scope = window_scope(window, cx);
@@ -8346,7 +8346,9 @@ impl Render for Shell {
                         });
                     })
                     .child(self.modal_layer.clone()),
-            )
+            );
+        // The window's frame, drawn by YARD on Linux, and its background.
+        yard_ui::client_decorations(root, window, cx)
     }
 }
 

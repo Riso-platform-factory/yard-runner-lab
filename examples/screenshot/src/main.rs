@@ -1,15 +1,25 @@
 //! Renders the window `cargo run` shows into a PNG, with GPUI's headless
 //! renderer, so no display server is needed.
 //!
-//! `cargo run -p screenshot -- --out <file.png> [--width 1280 --height 800]`
+//! `cargo run -p screenshot -- --out <file.png> [--width 1280 --height 800]
+//! [--view gallery --gallery <case>]`
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use gpui::{
     AnyWindowHandle, Bounds, HeadlessAppContext, PlatformHeadlessRenderer, WindowBounds, point, px,
     size,
 };
 use std::{cell::RefCell, path::PathBuf, process::ExitCode, sync::Arc, time::Duration};
-use yard::startup::{EXTENSIONS, PRODUCT};
+use yard::startup::{EXTENSIONS, Init, PRODUCT};
+
+/// What the window shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum View {
+    /// The window `cargo run` shows.
+    Window,
+    /// The same window, with the UI kit's gallery as its content.
+    Gallery,
+}
 
 /// Renders the window `cargo run` shows into a PNG.
 #[derive(Parser)]
@@ -23,6 +33,13 @@ struct Args {
     /// The window's height, in pixels.
     #[arg(long, default_value_t = 800)]
     height: u32,
+    /// What the window shows.
+    #[arg(long, value_enum, default_value_t = View::Window)]
+    view: View,
+    /// The gallery's case, as `UI_GALLERY` names it, with `--view gallery`:
+    /// `all`, or `window-controls` for that page alone.
+    #[arg(long, default_value = "all")]
+    gallery: String,
 }
 
 fn main() -> ExitCode {
@@ -30,6 +47,12 @@ fn main() -> ExitCode {
     let home = tempfile::tempdir().expect("a temporary folder can be created");
     // SAFETY: nothing has started a thread yet.
     unsafe { std::env::set_var(PRODUCT.home_variable(), home.path()) };
+    let mut extensions: Vec<(&'static str, Init)> = EXTENSIONS.to_vec();
+    if args.view == View::Gallery {
+        // SAFETY: nothing has started a thread yet.
+        unsafe { std::env::set_var("UI_GALLERY", &args.gallery) };
+        extensions.push(("ui_gallery", ui_gallery::init));
+    }
     let (product, paths) = yard::startup::start_logs(PRODUCT);
     // The group covers the renderer and the capture; the app's own startup
     // between them shows in the trace as the app's startup does.
@@ -37,7 +60,8 @@ fn main() -> ExitCode {
         "screenshot-capture",
         width = args.width,
         height = args.height,
-        out = %args.out.display()
+        out = %args.out.display(),
+        view = ?args.view
     );
     let Some(renderer) = group.in_scope(start_renderer) else {
         return ExitCode::FAILURE;
@@ -54,7 +78,7 @@ fn main() -> ExitCode {
             cx,
             product,
             &paths,
-            EXTENSIONS,
+            &extensions,
             yard::menus::menus,
             &RefCell::default(),
         )
