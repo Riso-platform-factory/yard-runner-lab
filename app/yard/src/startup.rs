@@ -150,23 +150,20 @@ fn window_options(product: Product) -> WindowOptions {
     }
 }
 
-/// The product's icon, decoded once from the PNG that `build.rs` sized for
-/// X11, as Zed's window options do.
+/// The window icon, decoded on first use from the PNG that `build.rs` wrote,
+/// and shared by every window after that.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn app_icon() -> Option<Arc<image::RgbaImage>> {
-    static APP_ICON: std::sync::LazyLock<Option<Arc<image::RgbaImage>>> =
-        std::sync::LazyLock::new(|| {
-            const BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app_icon.png"));
-            match image::load_from_memory_with_format(BYTES, image::ImageFormat::Png) {
-                Ok(image) => Some(Arc::new(image.into_rgba8())),
-                // `build.rs` wrote this PNG, so it not decoding is a bug.
-                Err(error) => {
-                    tracing::error!("the window icon does not decode: {error}");
-                    None
-                }
-            }
-        });
-    APP_ICON.clone()
+    static ICON: std::sync::OnceLock<Option<Arc<image::RgbaImage>>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        let png = include_bytes!(concat!(env!("OUT_DIR"), "/window_icon.png"));
+        image::load_from_memory_with_format(png, image::ImageFormat::Png)
+            .map(|icon| Arc::new(icon.into_rgba8()))
+            // `build.rs` wrote this PNG with the same crate, so a failure is a bug.
+            .inspect_err(|error| tracing::error!("the window icon does not decode: {error}"))
+            .ok()
+    })
+    .clone()
 }
 
 fn open_window(cx: &mut App, product: Product, window_file: Option<std::path::PathBuf>) {

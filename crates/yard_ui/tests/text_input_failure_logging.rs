@@ -22,6 +22,11 @@ impl log::Log for Diagnostics {
 
 #[test]
 fn shape_and_paint_share_one_failure_diagnostic_until_the_text_changes() {
+    // Until a `tracing` dispatcher has been set in the process, `tracing`'s
+    // `log` feature (which GPUI's Linux platform turns on, through calloop)
+    // sends every trace line to the `log` crate too; one set here keeps the
+    // trace out of the diagnostic log on every system, as in the app.
+    tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {});
     log::set_logger(&Diagnostics).unwrap();
     log::set_max_level(log::LevelFilter::Trace);
     let input = failure::Failure::default();

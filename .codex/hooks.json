@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$HOME/.agents/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$HOME/.agents/ponytail/hooks/ponytail-activate.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$PWD/.agents/vendor/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$PWD/.agents/vendor/ponytail/hooks/ponytail-activate.js\"",
             "timeout": 15,
             "statusMessage": "Loading ponytail mode..."
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$HOME/.agents/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$HOME/.agents/ponytail/hooks/ponytail-subagent.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$PWD/.agents/vendor/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$PWD/.agents/vendor/ponytail/hooks/ponytail-subagent.js\"",
             "timeout": 15,
             "statusMessage": "Loading ponytail mode..."
           }
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$HOME/.agents/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$HOME/.agents/ponytail/hooks/ponytail-mode-tracker.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$PWD/.agents/vendor/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$PWD/.agents/vendor/ponytail/hooks/ponytail-mode-tracker.js\"",
             "timeout": 15,
             "statusMessage": "Tracking ponytail mode..."
           }

@@ -1,16 +1,11 @@
 # Ponytail Plugin Profile (`ponytail`)
 
-Verified project-scoped linking blueprint for `~/.agents/ponytail`
-(`https://github.com/DietrichGebert/ponytail`), avoiding global installation.
+Verified project-scoped Model A blueprint for `~/.agents/ponytail`
+(`https://github.com/DietrichGebert/ponytail`), avoiding global installation and repo clutter.
 
 ## Plugin Analysis
 
 - **Cache path**: `~/.agents/ponytail`
-- **Manifests**:
-  - `plugin.json` (`{"name": "ponytail"}` — Antigravity plugin marker)
-  - `.claude-plugin/plugin.json` & `.claude-plugin/marketplace.json`
-  - `.codex-plugin/plugin.json`
-  - `gemini-extension.json`
 - **Skills** (`skills/<name>/SKILL.md`, 6 skills total):
   - `ponytail`
   - `ponytail-audit`
@@ -18,42 +13,46 @@ Verified project-scoped linking blueprint for `~/.agents/ponytail`
   - `ponytail-gain`
   - `ponytail-help`
   - `ponytail-review`
-  - *Ignore* `skills/plugin.json` (metadata file, not a skill directory).
+  - *Skip* `skills/plugin.json` (metadata file, not a skill directory).
 - **Hooks** (`hooks/claude-codex-hooks.json`):
   - Events: `SessionStart` (`matcher: "startup|resume|clear|compact"`), `SubagentStart`, `UserPromptSubmit`.
-  - Scripts (require `node` on `PATH`):
-    - `hooks/ponytail-activate.js`
-    - `hooks/ponytail-subagent.js`
-    - `hooks/ponytail-mode-tracker.js`
+  - Runtime scripts required (require `node` on `PATH`):
+    - Entrypoints: `hooks/ponytail-activate.js`, `hooks/ponytail-subagent.js`, `hooks/ponytail-mode-tracker.js`
+    - Internal helpers required/spawned by entrypoints: `hooks/ponytail-runtime.js`, `hooks/ponytail-config.js`, `hooks/ponytail-instructions.js`, `hooks/ponytail-map.js`, `hooks/ponytail-band-import.js`, `hooks/ponytail-statusline.sh`
+  - Relative path dependency: `hooks/ponytail-instructions.js` reads `path.join(__dirname, '..', 'skills', 'ponytail', 'SKILL.md')`, which resolves naturally inside `.agents/vendor/ponytail/`.
   - Runtime env detection (`hooks/ponytail-runtime.js`):
-    - Reads `CLAUDE_PLUGIN_ROOT` (must be set).
-    - Uses `CLAUDE_PROJECT_DIR` for per-project Claude state under `~/.claude/ponytail-modes/<sha256>`.
-    - Sets `isCodex = true` when `PLUGIN_DATA` is non-empty (stores state in `$PLUGIN_DATA` and outputs Codex `hookSpecificOutput` JSON).
-  - **Antigravity**: No Antigravity `hooks.json` at plugin root (`agy plugin validate` reports `skills 6 · hooks 0 · rules 0 · mcpServers 0`). Do **not** wire `claude-codex-hooks.json` into `.agents/hooks.json`.
+    - Reads `CLAUDE_PLUGIN_ROOT` (set to `.agents/vendor/ponytail`).
+    - Sets `isCodex = true` when `PLUGIN_DATA` is non-empty (stores state in `$PWD/.codex/plugin-data/ponytail` and outputs Codex `hookSpecificOutput` JSON).
+  - **Antigravity**: No Antigravity `hooks.json` at plugin root. Do **not** wire `claude-codex-hooks.json` into `.agents/hooks.json`.
+- **Pruned repo clutter (do NOT copy into workspace)**:
+  - `.git/`, `.github/`, `tests/`, `benchmarks/`, `docs/`, `examples/`, `assets/`, `commands/`, `i18n/`, `pi-extension/`, `scripts/`, `hooks/band/`, `hooks/*-hooks.json`, `AGENTS.md`, `.agents/rules/`, `.cursor/`, `.windsurf/`, `.qoder/`, `.kiro/`, `.opencode/`, `.openclaw/`, `README.md`, `INSTALL.md`, `package.json`, `plugin.json`, `plugin.yaml`, `gemini-extension.json`.
 - **Rules**:
   - Ships `AGENTS.md` and `.agents/rules/ponytail.md` (always-on rule).
-  - If the target project already has `AGENTS.md` / `CLAUDE.md`, **skip** linking rules so project rules are not overridden; use skills + hooks instead.
+  - If the target project already has `AGENTS.md` / `CLAUDE.md`, **skip** copying rules so project rules are not overridden; use skills + hooks instead.
 
-## Project-Scope Copy, Symlinks & Wiring
+## Project-Scope Materialization & Wiring
 
-### 1. Copy Skills into `.agents/skills/` (Antigravity + Codex) & Symlink `.claude/`
+### 1. Pruned Copy into `.agents/vendor/ponytail/` & Intra-Workspace Symlinks
 
 ```bash
-mkdir -p .agents/skills .claude/plugins .claude/skills .codex
+mkdir -p .agents/vendor/ponytail/skills .agents/vendor/ponytail/hooks .agents/skills .claude/skills .codex
 
-# Copy only the 6 skill directories into .agents/skills (no .agents/plugins bloat)
+# 6 skills -> .agents/vendor/ponytail/skills/<name> + intra-workspace symlinks
 for name in ponytail ponytail-audit ponytail-debt ponytail-gain ponytail-help ponytail-review; do
-  rsync -a --delete --exclude='.git' "$HOME/.agents/ponytail/skills/$name/" ".agents/skills/$name/"
-  ln -sfn "../../.agents/skills/$name" ".claude/skills/$name"
+  rsync -a --delete --exclude='.git' "$HOME/.agents/ponytail/skills/$name/" ".agents/vendor/ponytail/skills/$name/"
+  ln -sfn "../vendor/ponytail/skills/$name" ".agents/skills/$name"
+  ln -sfn "../../.agents/vendor/ponytail/skills/$name" ".claude/skills/$name"
 done
 
-# Claude Code plugin anchor for hooks
-ln -sfn "$HOME/.agents/ponytail" .claude/plugins/ponytail
+# Runtime hook scripts only (preserving ../skills/ layout)
+cp -p "$HOME/.agents/ponytail"/hooks/ponytail-*.js \
+      "$HOME/.agents/ponytail"/hooks/ponytail-statusline.sh \
+      .agents/vendor/ponytail/hooks/
 ```
 
 ### 2. Claude Code Hooks (`.claude/settings.local.json`)
 
-Merge into `"hooks"` in `.claude/settings.local.json`:
+Merge into `"hooks"` in `.claude/settings.local.json` (no `.claude/plugins/` symlink needed):
 
 ```json
 {
@@ -64,7 +63,7 @@ Merge into `"hooks"` in `.claude/settings.local.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail\" node \"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail/hooks/ponytail-activate.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail\" node \"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail/hooks/ponytail-activate.js\"",
             "timeout": 15,
             "statusMessage": "Loading ponytail mode..."
           }
@@ -76,7 +75,7 @@ Merge into `"hooks"` in `.claude/settings.local.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail\" node \"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail/hooks/ponytail-subagent.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail\" node \"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail/hooks/ponytail-subagent.js\"",
             "timeout": 15,
             "statusMessage": "Loading ponytail mode..."
           }
@@ -88,7 +87,7 @@ Merge into `"hooks"` in `.claude/settings.local.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail\" node \"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail/hooks/ponytail-mode-tracker.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail\" node \"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail/hooks/ponytail-mode-tracker.js\"",
             "timeout": 15,
             "statusMessage": "Tracking ponytail mode..."
           }
@@ -112,7 +111,7 @@ Merge into `"hooks"` in `.codex/hooks.json` (note `PLUGIN_DATA` keeps state proj
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$HOME/.agents/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$HOME/.agents/ponytail/hooks/ponytail-activate.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$PWD/.agents/vendor/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$PWD/.agents/vendor/ponytail/hooks/ponytail-activate.js\"",
             "timeout": 15,
             "statusMessage": "Loading ponytail mode..."
           }
@@ -124,7 +123,7 @@ Merge into `"hooks"` in `.codex/hooks.json` (note `PLUGIN_DATA` keeps state proj
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$HOME/.agents/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$HOME/.agents/ponytail/hooks/ponytail-subagent.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$PWD/.agents/vendor/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$PWD/.agents/vendor/ponytail/hooks/ponytail-subagent.js\"",
             "timeout": 15,
             "statusMessage": "Loading ponytail mode..."
           }
@@ -136,7 +135,7 @@ Merge into `"hooks"` in `.codex/hooks.json` (note `PLUGIN_DATA` keeps state proj
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$HOME/.agents/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$HOME/.agents/ponytail/hooks/ponytail-mode-tracker.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$PWD/.agents/vendor/ponytail\" PLUGIN_DATA=\"$PWD/.codex/plugin-data/ponytail\" node \"$PWD/.agents/vendor/ponytail/hooks/ponytail-mode-tracker.js\"",
             "timeout": 15,
             "statusMessage": "Tracking ponytail mode..."
           }
@@ -151,7 +150,6 @@ Merge into `"hooks"` in `.codex/hooks.json` (note `PLUGIN_DATA` keeps state proj
 
 ```gitignore
 .agents/
-.claude/plugins/
 .claude/skills/
 .claude/settings.local.json
 .codex/
@@ -160,12 +158,12 @@ Merge into `"hooks"` in `.codex/hooks.json` (note `PLUGIN_DATA` keeps state proj
 ## Verification & Unlink
 
 - Validate Claude skills: `claude plugin validate .claude/skills`
-- Dry-run Claude hook: `CLAUDE_PROJECT_DIR="$PWD" CLAUDE_PLUGIN_ROOT="$PWD/.claude/plugins/ponytail" node "$PWD/.claude/plugins/ponytail/hooks/ponytail-activate.js" </dev/null`
-- Dry-run Codex hook: `CLAUDE_PLUGIN_ROOT="$HOME/.agents/ponytail" PLUGIN_DATA="$PWD/.codex/plugin-data/ponytail" node "$HOME/.agents/ponytail/hooks/ponytail-activate.js" </dev/null`
+- Dry-run Claude hook: `CLAUDE_PROJECT_DIR="$PWD" CLAUDE_PLUGIN_ROOT="$PWD/.agents/vendor/ponytail" node "$PWD/.agents/vendor/ponytail/hooks/ponytail-activate.js" </dev/null`
+- Dry-run Codex hook: `CLAUDE_PLUGIN_ROOT="$PWD/.agents/vendor/ponytail" PLUGIN_DATA="$PWD/.codex/plugin-data/ponytail" node "$PWD/.agents/vendor/ponytail/hooks/ponytail-activate.js" </dev/null`
 - Unlink from project (leaves `~/.agents/ponytail` intact):
   ```bash
-  rm -rf .agents/skills/ponytail .agents/skills/ponytail-* \
-         .claude/plugins/ponytail .claude/skills/ponytail .claude/skills/ponytail-* \
+  rm -rf .agents/vendor/ponytail .agents/skills/ponytail .agents/skills/ponytail-* \
+         .claude/skills/ponytail .claude/skills/ponytail-* \
          .codex/plugin-data/ponytail
   ```
   (And remove the `ponytail` hook entries from `.claude/settings.local.json` and `.codex/hooks.json`.)

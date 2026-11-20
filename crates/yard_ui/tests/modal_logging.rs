@@ -213,6 +213,11 @@ fn drawing_a_modal_logs_one_trace_line_and_a_close_click_groups_the_owners_line(
     cx: &mut TestAppContext,
 ) {
     cx.update(yard_ui::init);
+    // Until a `tracing` dispatcher has been set in the process, `tracing`'s
+    // `log` feature (which GPUI's Linux platform turns on, through calloop)
+    // sends every trace line to the `log` crate too; one set here keeps the
+    // trace out of the diagnostic log on every system, as in the app.
+    tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {});
     log::set_logger(&Diagnostics).unwrap();
     log::set_max_level(log::LevelFilter::Trace);
     let (_page, cx) = cx.add_window_view(|_, _| Page);

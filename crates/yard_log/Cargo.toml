@@ -27,3 +27,5 @@ libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Linux turns this on through calloop; the tests turn it on everywhere.
+tracing = { workspace = true, features = ["log"] }

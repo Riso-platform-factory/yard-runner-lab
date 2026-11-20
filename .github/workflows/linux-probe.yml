@@ -38,6 +38,7 @@ jobs:
         run: |
           cargo test --workspace --no-fail-fast -- --skip what_is_outside_dev_is_in_production 2>&1 | tee test.log
           for i in $(seq 20); do cargo test -q -p yard_update --test other_systems 2>&1 | tail -1; done | tee other_systems_20.log
+          cargo test -p yard_log --test no_lifecycle_trace --config 'profile.dev.package.yard_log.debug-assertions=false' 2>&1 | tail -3 | tee no_lifecycle_trace.log
       - name: Run the app under Xvfb and take a screenshot
         if: steps.build.outcome == 'success'
         continue-on-error: true
@@ -66,6 +67,7 @@ jobs:
             windows.txt
             dirs.txt
             other_systems_20.log
+            no_lifecycle_trace.log
             screenshot.png
             window.png
           if-no-files-found: ignore

@@ -97,7 +97,7 @@ The app, the zip, and the disk image are all made inside a staging folder in `--
 | Linux | `<name>-<version>-linux-<arch>.tar.gz`, holding `<name>.app/` (see below) | `script/bundle-linux` |
 | Windows | `<Name>-<version>-<arch>-setup.exe` made by Inno Setup, and `<Name>-<version>-windows-<arch>.zip` | `script/bundle-windows.ps1`, `zed.iss` |
 
-**The Linux package.** Zed's layout and install script:
+**The Linux package.** Zed's layout and install script. On Linux, `<name>` is the product name in lower case, each run of characters other than ASCII letters and digits turned into one `-` (`Lab Notes Pro` → `lab-notes-pro`), as Zed's files are named `zed`; a config whose name gives an empty `<name>` is refused.
 
 ```text
 <name>.app/
@@ -144,7 +144,7 @@ These change engines that are in production today. Each change goes to the user 
   - **No separate CLI binary** (YARD's own choice). Zed sends through a separate `cli` binary; YARD's app does it itself.
 - **URLs.** GPUI does not deliver `on_open_urls` on Linux or Windows. The URL arrives as an argument, of the first start or forwarded by a second one. It goes to the same handler that macOS's `on_open_urls` feeds, so an extension's `on_open_url` works the same on the three systems.
 - **Directories (`yard_paths`), as Zed's `paths`:**
-  - **Linux:** `$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`, `$XDG_STATE_HOME`, and `$XDG_CACHE_HOME`, each with `/<name>`.
+  - **Linux:** `$XDG_CONFIG_HOME/<name>` (else `~/.config/<name>`) and `$XDG_DATA_HOME/<name>` (else `~/.local/share/<name>`), with logs in `<data>/logs`, as Zed's. State and cache folders come when something uses them.
   - **Windows:** `%APPDATA%\<Name>` for settings, and `%LOCALAPPDATA%\<Name>` for data, logs, and cache.
 - **Updates.** On Linux and Windows, `yard_update` compiles and does nothing, with a `debug` line, until the `release-updates` slice. The macOS-only code (`renamex_np`, `ditto`, `codesign`) is put behind `cfg(target_os = "macos")`.
 
@@ -158,7 +158,7 @@ The configs live in `crates/yard_build_config/tests/configs/`, where `xtask` rea
 | `spaced` | Name `Lab Notes Pro`, with spaces, in the bundle, the `.desktop` file, the installer, the shortcuts, and the directories |
 | `other` | Another identifier, scheme, and icon: two apps installed side by side do not meet (directories, socket, mutex, scheme) |
 | `signed` | `[release.macos]` with `dmg` and `[release.macos.signing]`, and `[release.windows.signing]`. Its identity is a self-signed code-signing certificate made by the test (`Developer ID Application: YARD Test (YARDTEST01)`), since no real Developer ID belongs in YARD |
-| `bad-*` | A missing key, a bad identifier, an icon that is not square or too small, an unknown key, an unknown key in `[release.macos]`: each refused, naming the file and the key |
+| `bad-*` | A missing key, a bad identifier, a name with no ASCII letter or digit (no `<name>` for Linux), an icon that is not square or too small, an unknown key, an unknown key in `[release.macos]`: each refused, naming the file and the key |
 
 ## How it is checked
 

@@ -1,39 +1,37 @@
 # Humanizer Plugin/Skill Profile (`humanizer`)
 
-Verified project-scoped linking blueprint for `~/.agents/humanizer`
-(`https://github.com/blader/humanizer`), avoiding global installation.
+Verified project-scoped Model A blueprint for `~/.agents/humanizer`
+(`https://github.com/blader/humanizer`), avoiding global installation and repo clutter.
 
 ## Analysis
 
 - **Cache path**: `~/.agents/humanizer`
 - **Layout type**: **Skill-at-root** (`SKILL.md` is directly at the repository root, not inside `skills/`).
-- **Manifests**:
-  - `.claude-plugin/plugin.json` (`"skills": ["./"]`, no hooks, no MCP) & `.claude-plugin/marketplace.json`
-  - `.cursor-plugin/plugin.json`
-  - `package.json` (`pi` package)
-  - No root `plugin.json` / `.antigravity-plugin/plugin.json` / `.gemini-plugin/plugin.json`.
-- **Skills**:
-  - `SKILL.md` (name: `humanizer`, version: `4.0.0`)
+- **Runtime files actually needed**:
+  - `SKILL.md` (name: `humanizer`, version: `4.0.0` — self-contained, does not reference `scripts/` or other repo files)
   - `agents/openai.yaml` (Codex UI metadata & default prompt)
+- **Pruned repo clutter (do NOT copy into workspace)**:
+  - `AGENTS.md` (contributor guide for editing Humanizer itself)
+  - `.git/`, `.github/`, `.claude-plugin/`, `.cursor-plugin/`, `README.md`, `CHANGELOG.md`, `LICENSE`, `package.json`, `scripts/validate-package.py`
 - **Hooks / MCP**: None.
-- **Rules**: `AGENTS.md` at root is a contributor guide for editing Humanizer itself — do **not** link it as a project rule.
 
-## Project-Scope Copy & Symlinks
+## Project-Scope Materialization & Wiring
 
-### 1. Copy for Antigravity + Codex (`.agents/`) & Symlink for Claude Code (`.claude/`)
-
-Because `SKILL.md` and `agents/openai.yaml` sit at the repository root (and there is no root Antigravity `plugin.json`), copy the repo (excluding `.git`) into `.agents/skills/humanizer`, then symlink `.claude/skills/humanizer` from that copy:
+### 1. Pruned Copy into `.agents/vendor/humanizer/` & Intra-Workspace Symlinks
 
 ```bash
-mkdir -p .agents/skills .claude/skills
+mkdir -p .agents/vendor/humanizer/skills/humanizer/agents .agents/skills .claude/skills
 
-rsync -a --delete --exclude='.git' "$HOME/.agents/humanizer/" .agents/skills/humanizer/
-ln -sfn ../../.agents/skills/humanizer .claude/skills/humanizer
+cp -p "$HOME/.agents/humanizer/SKILL.md" .agents/vendor/humanizer/skills/humanizer/SKILL.md
+cp -p "$HOME/.agents/humanizer/agents/openai.yaml" .agents/vendor/humanizer/skills/humanizer/agents/openai.yaml
+
+ln -sfn ../vendor/humanizer/skills/humanizer .agents/skills/humanizer
+ln -sfn ../../.agents/vendor/humanizer/skills/humanizer .claude/skills/humanizer
 ```
 
-- **Antigravity**: Loads `.agents/skills/humanizer/SKILL.md` (real directory).
+- **Antigravity (CLI + IDE)**: Loads `.agents/skills/humanizer/SKILL.md` via intra-workspace symlink to `.agents/vendor/humanizer/skills/humanizer`.
 - **Codex**: Loads `.agents/skills/humanizer/SKILL.md` and `agents/openai.yaml`.
-- **Claude Code**: Loads `.claude/skills/humanizer/SKILL.md` via symlink to `.agents/skills/humanizer` (no `settings.local.json` hook edits needed).
+- **Claude Code**: Loads `.claude/skills/humanizer/SKILL.md` via intra-workspace symlink (no `settings.local.json` hook edits needed).
 
 ### 2. Local Git Exclude (`.git/info/exclude`)
 
@@ -44,10 +42,10 @@ ln -sfn ../../.agents/skills/humanizer .claude/skills/humanizer
 
 ## Verification & Unlink
 
-- Verify copy & symlink resolve:
+- Verify vendor files & symlinks resolve:
   `test -f .agents/skills/humanizer/SKILL.md && test -f .claude/skills/humanizer/SKILL.md`
 - Validate Claude skills dir: `claude plugin validate .claude/skills`
 - Unlink from project (leaves `~/.agents/humanizer` intact):
   ```bash
-  rm -rf .agents/skills/humanizer .claude/skills/humanizer
+  rm -rf .agents/vendor/humanizer .agents/skills/humanizer .claude/skills/humanizer
   ```

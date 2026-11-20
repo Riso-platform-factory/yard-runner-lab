@@ -19,23 +19,17 @@ fn main() {
         config.update_url.unwrap_or_default()
     );
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    prepare_app_icon_x11(&config.icon);
+    write_window_icon(&config.icon);
 }
 
-/// Writes the config's icon at 256 × 256 to `$OUT_DIR/app_icon.png`, which
-/// the app decodes for its X11 window icon, as Zed's `build.rs` does.
+/// Writes the config's icon as a 256 × 256 PNG, `$OUT_DIR/window_icon.png`,
+/// which `startup.rs` embeds as the window icon on X11.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn prepare_app_icon_x11(icon: &std::path::Path) {
-    use image::{ImageReader, imageops};
-
-    let resized = ImageReader::open(icon)
-        .unwrap_or_else(|error| panic!("opening {} failed: {error}", icon.display()))
-        .decode()
-        .unwrap_or_else(|error| panic!("decoding {} failed: {error}", icon.display()))
-        .resize(256, 256, imageops::FilterType::Lanczos3);
-    // The name matches the `include_bytes!` of the window options in `startup.rs`.
-    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("app_icon.png");
-    resized
-        .save(&out)
-        .unwrap_or_else(|error| panic!("saving {} failed: {error}", out.display()));
+fn write_window_icon(icon: &std::path::Path) {
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("window_icon.png");
+    image::open(icon)
+        .unwrap_or_else(|error| panic!("reading the icon {} failed: {error}", icon.display()))
+        .resize_exact(256, 256, image::imageops::FilterType::CatmullRom)
+        .save_with_format(&out, image::ImageFormat::Png)
+        .unwrap_or_else(|error| panic!("writing {} failed: {error}", out.display()));
 }

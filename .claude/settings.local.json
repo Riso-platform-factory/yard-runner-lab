@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail\" node \"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail/hooks/ponytail-activate.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail\" node \"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail/hooks/ponytail-activate.js\"",
             "timeout": 15,
             "statusMessage": "Loading ponytail mode..."
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail\" node \"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail/hooks/ponytail-subagent.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail\" node \"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail/hooks/ponytail-subagent.js\"",
             "timeout": 15,
             "statusMessage": "Loading ponytail mode..."
           }
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail\" node \"$CLAUDE_PROJECT_DIR/.claude/plugins/ponytail/hooks/ponytail-mode-tracker.js\"",
+            "command": "CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail\" node \"$CLAUDE_PROJECT_DIR/.agents/vendor/ponytail/hooks/ponytail-mode-tracker.js\"",
             "timeout": 15,
             "statusMessage": "Tracking ponytail mode..."
           }

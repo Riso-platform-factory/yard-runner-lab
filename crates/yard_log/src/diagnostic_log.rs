@@ -146,6 +146,12 @@ pub fn start(product: Product) {
         if unsafe { libc::atexit(at_exit) } != 0 {
             eprintln!("could not register the end of the lifecycle trace");
         }
+    } else {
+        // With `tracing`'s `log` feature on (calloop turns it on for Linux),
+        // events are sent to `log` until a dispatcher has been set, so
+        // without one the lifecycle trace would end up in the diagnostic log.
+        tracing::subscriber::set_global_default(tracing::subscriber::NoSubscriber::default())
+            .expect("could not install the silent subscriber");
     }
 
     log::set_logger(&Logger)
