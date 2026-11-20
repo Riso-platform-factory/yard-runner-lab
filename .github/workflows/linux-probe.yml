@@ -20,7 +20,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q gcc g++ clang lld cmake pkg-config libasound2-dev libfontconfig-dev \
             libglib2.0-dev libssl-dev libvulkan1 mesa-vulkan-drivers libwayland-dev libx11-xcb-dev \
-            libxkbcommon-x11-dev libzstd-dev libstdc++-12-dev xvfb imagemagick xdotool x11-utils desktop-file-utils
+            libxkbcommon-x11-dev libzstd-dev libstdc++-12-dev xvfb imagemagick xdotool x11-utils openbox desktop-file-utils
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the production app
@@ -44,13 +44,16 @@ jobs:
         run: |
           Xvfb :99 -screen 0 1280x800x24 & sleep 2
           export DISPLAY=:99
-          env -u YARD_HOME YARD_LIFECYCLE=debug target/debug/yard > app.log 2>&1 & sleep 15
+          openbox & sleep 2
+          env -u YARD_HOME YARD_LIFECYCLE=info,yard=debug target/debug/yard > app.log 2>&1 & sleep 15
+          WID=$(xdotool search --classname vn.risotech.yard | head -1)
+          echo "window $WID" > windows.txt
+          xprop -id "$WID" WM_CLASS _NET_WM_NAME >> windows.txt 2>&1 || true
+          xprop -id "$WID" -notype _NET_WM_ICON 2>&1 | head -3 >> windows.txt || true
           import -window root screenshot.png
-          xdotool search --name . getwindowname %@ > windows.txt 2>&1 || true
-          xprop -root _NET_ACTIVE_WINDOW >> windows.txt 2>&1 || true
-          for w in $(xdotool search --name . 2>/dev/null); do xprop -id $w WM_CLASS _NET_WM_NAME 2>/dev/null; xprop -id $w _NET_WM_ICON 2>/dev/null | head -c 120; echo; done >> windows.txt
+          import -window "$WID" window.png || true
           ls -R ~/.config/yard ~/.local/share/yard > dirs.txt 2>&1 || true
-          kill %2 || true
+          pkill -f target/debug/yard || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -64,4 +67,5 @@ jobs:
             dirs.txt
             other_systems_20.log
             screenshot.png
+            window.png
           if-no-files-found: ignore
