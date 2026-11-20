@@ -155,8 +155,8 @@ The configs live in `crates/yard_build_config/tests/configs/`, where `xtask` rea
 | Config | What it proves |
 |---|---|
 | `plain` | Name `Lab`, identifier `test.yard.lab`, scheme `yardlab`: the basic case |
-| `spaced` | Name `Lab Notes Pro`, with spaces, in the bundle, the `.desktop` file, the installer, the shortcuts, and the directories |
-| `other` | Another identifier, scheme, and icon: two apps installed side by side do not meet (directories, socket, mutex, scheme) |
+| `spaced` | Name `Lab Notes Pro`, with spaces: kept as written in the macOS bundle, the Windows installer and shortcuts, and the directories on macOS and Windows; `lab-notes-pro` in the Linux files and directories |
+| `other` | Another name, identifier, scheme, and icon: two apps installed side by side do not meet (directories, socket, mutex, scheme). Two names that give the same Linux `<name>`, such as `Lab Notes` and `Lab-Notes`, share their Linux directories; an app's name must differ from another's in its letters or digits |
 | `signed` | `[release.macos]` with `dmg` and `[release.macos.signing]`, and `[release.windows.signing]`. Its identity is a self-signed code-signing certificate made by the test (`Developer ID Application: YARD Test (YARDTEST01)`), since no real Developer ID belongs in YARD |
 | `bad-*` | A missing key, a bad identifier, a name with no ASCII letter or digit (no `<name>` for Linux), an icon that is not square or too small, an unknown key, an unknown key in `[release.macos]`: each refused, naming the file and the key |
 

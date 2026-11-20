@@ -7864,6 +7864,7 @@ dependencies = [
  "image",
  "reqwest_client",
  "serde_json",
+ "tempfile",
  "tracing",
  "yard_build_config",
  "yard_keymap",

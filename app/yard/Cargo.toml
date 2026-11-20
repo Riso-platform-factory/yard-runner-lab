@@ -32,10 +32,11 @@ reqwest_client = { workspace = true }
 image.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
+yard_build_config = { workspace = true, default-features = false }
 
 [build-dependencies]
 yard_build_config = { workspace = true, default-features = false }
-
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.build-dependencies]
 image.workspace = true
