@@ -76,102 +76,41 @@ fn a_bad_request_is_refused() {
 }
 
 #[test]
-fn arguments_with_a_scheme_are_urls() {
+fn only_urls_of_the_product_scheme_are_urls() {
     let arguments = strings(&[
         "yard://tour/a",
+        "YARD://tour/b",
+        "yard:tour",
         "mailto:someone@example.com",
-        "x-yard+1.2:thing",
+        "yard-check://tour/c",
         "dev",
         "--flag",
-        "/home/me/a:b",
+        "/home/me/yard:b",
         "notes.txt",
-        "C:\\file",
-        "1yard://a",
-        ":nothing",
     ]);
     assert_eq!(
-        shell::argument_urls(&arguments),
-        [
-            "yard://tour/a",
-            "mailto:someone@example.com",
-            "x-yard+1.2:thing"
-        ]
+        shell::argument_urls(&arguments, "yard"),
+        ["yard://tour/a", "YARD://tour/b", "yard:tour"]
     );
+    assert!(shell::argument_urls(&arguments, "").is_empty());
 }
 
-#[cfg(unix)]
-mod socket {
+#[cfg(target_os = "linux")]
+mod linux {
     use super::*;
-    use std::os::unix::net::UnixDatagram;
 
     #[test]
-    fn the_first_start_makes_the_folder_and_listens() {
+    fn the_first_start_listens_and_the_second_hands_over() {
         let home = tempfile::tempdir().unwrap();
-        let path = home.path().join("data/instance.sock");
-        let first = match shell::check_instance(&path, &[]) {
-            shell::Instance::First(listener) => listener,
-            other => panic!("the first start listens: {other:?}"),
+        let paths = yard_paths::Paths::under(home.path());
+        let shell::Instance::Listening(_first) = shell::check_instance(&paths, &[]) else {
+            panic!("the first start listens");
         };
-        assert_eq!(first.path(), path);
-        assert!(path.exists());
-    }
-
-    #[test]
-    fn a_second_start_hands_its_arguments_to_the_first() {
-        let home = tempfile::tempdir().unwrap();
-        let path = home.path().join("instance.sock");
-        let listener = UnixDatagram::bind(&path).unwrap();
-        let arguments = strings(&["yard://tour/a", "dev"]);
+        assert!(paths.instance_socket().exists());
         assert!(matches!(
-            shell::check_instance(&path, &arguments),
-            shell::Instance::Sent
+            shell::check_instance(&paths, &strings(&["yard://tour/a"])),
+            shell::Instance::Forwarded
         ));
-        let mut buffer = vec![0; shell::MAX_REQUEST_LEN + 1];
-        let len = listener.recv(&mut buffer).unwrap();
-        assert_eq!(shell::decode_request(&buffer[..len]).unwrap(), arguments);
-    }
-
-    #[test]
-    fn a_stale_socket_is_removed_and_bound_again() {
-        let home = tempfile::tempdir().unwrap();
-        let path = home.path().join("instance.sock");
-        // An instance that ended without removing its socket.
-        drop(UnixDatagram::bind(&path).unwrap());
-        assert!(path.exists());
-        let first = match shell::check_instance(&path, &[]) {
-            shell::Instance::First(listener) => listener,
-            other => panic!("a stale socket is replaced: {other:?}"),
-        };
-        assert!(path.exists());
-        // The new socket listens.
-        assert!(matches!(
-            shell::check_instance(&path, &[]),
-            shell::Instance::Sent
-        ));
-        drop(first);
-    }
-
-    #[test]
-    fn a_path_too_long_for_a_socket_runs_alone() {
-        let home = tempfile::tempdir().unwrap();
-        let path = home.path().join("a".repeat(200)).join("instance.sock");
-        assert!(matches!(
-            shell::check_instance(&path, &[]),
-            shell::Instance::Alone
-        ));
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn a_request_too_large_is_not_sent() {
-        let home = tempfile::tempdir().unwrap();
-        let path = home.path().join("instance.sock");
-        let _listener = UnixDatagram::bind(&path).unwrap();
-        let long = "a".repeat(shell::MAX_REQUEST_LEN);
-        match shell::check_instance(&path, &[long]) {
-            shell::Instance::Refused(reason) => assert!(reason.contains("bytes"), "{reason}"),
-            other => panic!("a request too large is refused: {other:?}"),
-        }
     }
 
     // GPUI's test scheduler refuses work from another thread, so no request
@@ -179,44 +118,60 @@ mod socket {
     #[gpui::test]
     fn the_socket_is_removed_on_quit(cx: &mut TestAppContext) {
         let home = tempfile::tempdir().unwrap();
-        let path = home.path().join("instance.sock");
-        let listener = match shell::check_instance(&path, &[]) {
-            shell::Instance::First(listener) => listener,
-            other => panic!("the first start listens: {other:?}"),
+        let paths = yard_paths::Paths::under(home.path());
+        let shell::Instance::Listening(listener) = shell::check_instance(&paths, &[]) else {
+            panic!("the first start listens");
         };
-        cx.update(|cx| shell::serve_instance_requests(cx, listener, |_, _| {}));
-        assert!(path.exists());
+        cx.update(|cx| shell::serve_instance_requests(cx, listener, "yard"));
+        assert!(paths.instance_socket().exists());
         cx.quit();
-        assert!(!path.exists(), "the socket is removed on quit");
+        assert!(
+            !paths.instance_socket().exists(),
+            "the socket is removed on quit"
+        );
     }
 }
 
-#[gpui::test]
-fn a_request_with_urls_opens_its_urls(cx: &mut TestAppContext) {
-    let opened = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
-    let request =
-        shell::encode_request(&strings(&["dev", "yard://tour/a", "yard://guest/b"])).unwrap();
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn other_systems_run_without_one_instance() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = yard_paths::Paths::under(home.path());
+    assert!(matches!(
+        shell::check_instance(&paths, &[]),
+        shell::Instance::Alone(_)
+    ));
+    assert!(!paths.instance_dir().exists());
+}
+
+type Opened = Rc<RefCell<Vec<String>>>;
+
+// The product's scheme is `test`, and the extension `tour` records the URLs
+// it gets, as the startup sets them up.
+fn app_with_tour(cx: &mut TestAppContext) -> Opened {
+    let opened = Opened::default();
     cx.update(|cx: &mut App| {
+        yard_ui::init(cx);
+        shell::set_url_scheme(cx, "test");
+        let tour = shell::Extension::new(cx, "tour").unwrap();
         let opened = opened.clone();
-        shell::handle_instance_request(cx, &request, &move |_, urls| {
-            opened.borrow_mut().push(urls)
-        });
+        tour.on_open_url(cx, move |url, _| opened.borrow_mut().push(url.to_owned()));
+        shell::extensions_loaded(cx);
     });
-    assert_eq!(
-        *opened.borrow(),
-        [strings(&["yard://tour/a", "yard://guest/b"])]
-    );
+    opened
 }
 
 #[gpui::test]
-fn a_request_without_urls_opens_nothing(cx: &mut TestAppContext) {
-    let opened = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
-    let request = shell::encode_request(&strings(&["dev"])).unwrap();
-    cx.update(|cx: &mut App| {
-        let opened = opened.clone();
-        shell::handle_instance_request(cx, &request, &move |_, urls| {
-            opened.borrow_mut().push(urls)
-        });
-    });
-    assert!(opened.borrow().is_empty());
+fn each_request_opens_its_urls_and_brings_the_window_to_the_front(cx: &mut TestAppContext) {
+    let opened = app_with_tour(cx);
+    let (requests, received) = futures::channel::mpsc::unbounded();
+    cx.update(|cx| shell::handle_instance_requests(cx, received, "test"));
+    let request = shell::encode_request(&strings(&["dev", "test://tour/a", "other://x"])).unwrap();
+    requests.unbounded_send(request).unwrap();
+    requests
+        .unbounded_send(shell::encode_request(&[]).unwrap())
+        .unwrap();
+    requests.unbounded_send(vec![9]).unwrap();
+    cx.run_until_parked();
+    assert_eq!(*opened.borrow(), ["test://tour/a"]);
 }

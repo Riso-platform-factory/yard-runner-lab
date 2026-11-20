@@ -2,7 +2,7 @@
 
 mod directories;
 mod file_check;
-mod instance_socket;
+mod instance_files;
 mod keymap_file;
 mod layout_file;
 mod named_layout_file;

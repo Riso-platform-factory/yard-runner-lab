@@ -142,11 +142,17 @@ These change engines that are in production today. Each change goes to the user 
   - `app_id` is the identifier, so Wayland and X11 match the window to its `.desktop` file.
   - The X11 icon comes from the config.
   - On Windows, `cx.set_app_identity` uses the identifier, as the shortcut does.
-- **One instance (`yard_shell`).** A second start hands its arguments to the first, which brings its window to the front, then the second exits:
-  - **Linux:** a Unix datagram socket in the app's data directory. A stale socket is removed.
-  - **Windows:** a named mutex and a named pipe, both named from the identifier.
+- **One instance (`yard_shell`).** On Linux, a start first looks for the running instance through a socket at `<data>/instance/instance.sock`:
+  - It holds a lock (`instance.lock` in the same folder) while it looks, so two starts at the same moment end with exactly one instance.
+  - The folder is private to the user (0700) and the socket is 0600. A start sends only to a socket owned by its own user, and removes only a stale socket of its own user, never a file or a link.
+  - If an instance runs, the start hands it all its arguments in one message and exits with code 0. A message larger than 64 KiB is refused: the start prints the reason and exits with code 1.
+  - Otherwise the start becomes the instance, and removes its socket on quit if the socket is still its own. After a crash or `kill`, the socket stays, and the next start removes it as stale.
+  - FreeBSD runs without one instance. Windows gets it in part 5, with a named mutex and a named pipe, both named from the identifier.
   - **No separate CLI binary** (YARD's own choice). Zed sends through a separate `cli` binary; YARD's app does it itself.
-- **URLs.** GPUI does not deliver `on_open_urls` on Linux or Windows. The URL arrives as an argument, of the first start or forwarded by a second one. It goes to the same handler that macOS's `on_open_urls` feeds, so an extension's `on_open_url` works the same on the three systems.
+- **URLs.** GPUI does not deliver `on_open_urls` on Linux or Windows, so URLs come as arguments, to the first start or forwarded by a later one. Only arguments whose scheme is the product's `url_scheme` count as URLs. Everything else is ignored, and arguments are never logged. URLs reach the same handler that macOS's `on_open_urls` feeds, so an extension's `on_open_url` works the same on every system.
+- **Bringing the window to the front.** Every forwarded request, with or without URLs, asks for the main window to come to the front. The system may refuse:
+  - On X11, the request is `_NET_ACTIVE_WINDOW`, which a window manager may refuse under focus-stealing prevention.
+  - On Wayland, a compositor gives focus only with a recent input event; KWin and Mutter otherwise mark the window as demanding attention.
 - **Directories (`yard_paths`), as Zed's `paths`:**
   - **Linux:** `$XDG_CONFIG_HOME/<name>` (else `~/.config/<name>`) and `$XDG_DATA_HOME/<name>` (else `~/.local/share/<name>`), with logs in `<data>/logs`, as Zed's. State and cache folders come when something uses them.
   - **Windows:** `%APPDATA%\<Name>` for settings, and `%LOCALAPPDATA%\<Name>` for data, logs, and cache.

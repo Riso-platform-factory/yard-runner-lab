@@ -122,75 +122,111 @@ fn one_instance_logs_what_each_start_and_request_does(cx: &mut TestAppContext) {
     log::set_logger(&Diagnostics).unwrap();
     log::set_max_level(log::LevelFilter::Trace);
     let home = tempfile::tempdir().unwrap();
-    let path = home.path().join("instance.sock");
+    let paths = yard_paths::Paths::under(home.path());
     let trace = Trace::default();
     tracing::subscriber::with_default(trace.clone(), || {
-        // A socket left by an instance that ended without removing it.
-        drop(std::os::unix::net::UnixDatagram::bind(&path).unwrap());
-        let first = shell::check_instance(&path, &[]);
-        assert!(matches!(first, shell::Instance::First(_)));
-        assert_eq!(
-            trace.take(),
-            [
-                "INFO instance-check socket=instance.sock: DEBUG message=stale socket removed",
-                "INFO instance-check socket=instance.sock: DEBUG message=listening",
-            ]
-        );
+        #[cfg(target_os = "linux")]
+        {
+            // A socket left by an instance that ended without removing it.
+            std::fs::create_dir_all(paths.instance_dir()).unwrap();
+            // Wider than the instance allows, whatever the umask.
+            let wide =
+                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755);
+            std::fs::set_permissions(paths.instance_dir(), wide).unwrap();
+            drop(std::os::unix::net::UnixDatagram::bind(paths.instance_socket()).unwrap());
+            let first = shell::check_instance(&paths, &[]);
+            assert!(matches!(first, shell::Instance::Listening(_)));
+            assert_eq!(
+                trace.take(),
+                [
+                    "INFO instance-check socket=instance.sock: DEBUG message=instance folder made private",
+                    "INFO instance-check socket=instance.sock: DEBUG message=stale socket removed",
+                    "INFO instance-check socket=instance.sock: DEBUG message=listening",
+                ]
+            );
 
-        let sent = shell::check_instance(&path, &strings(&["yard://tour/a"]));
-        assert!(matches!(sent, shell::Instance::Sent));
-        assert_eq!(
-            trace.take(),
-            [
-                "INFO instance-check socket=instance.sock: DEBUG message=sent to the running instance bytes=15"
-            ]
-        );
+            let forwarded =
+                shell::check_instance(&paths, &strings(&["test://tour/a?token=secret"]));
+            assert!(matches!(forwarded, shell::Instance::Forwarded));
+            assert_eq!(
+                trace.take(),
+                [
+                    "INFO instance-check socket=instance.sock: DEBUG message=sent to the running instance bytes=28"
+                ]
+            );
 
-        let refused = shell::check_instance(&path, &["a".repeat(shell::MAX_REQUEST_LEN)]);
-        assert!(matches!(refused, shell::Instance::Refused(_)));
-        assert_eq!(
-            trace.take(),
-            [
-                "INFO instance-check socket=instance.sock: WARN message=the running instance was not reached: the request is 65538 bytes, more than the 65536 the running instance reads"
-            ]
-        );
+            let refused = shell::check_instance(&paths, &["a".repeat(shell::MAX_REQUEST_LEN)]);
+            assert!(matches!(refused, shell::Instance::Refused(_)));
+            assert_eq!(
+                trace.take(),
+                [
+                    "INFO instance-check socket=instance.sock: WARN message=the running instance was not reached: the request is 65538 bytes, more than the 65536 the running instance reads"
+                ]
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let alone = shell::check_instance(&paths, &[]);
+            assert!(matches!(alone, shell::Instance::Alone(_)));
+            assert_eq!(
+                trace.take(),
+                [
+                    "INFO instance-check socket=instance.sock: DEBUG reason=no single instance on this system"
+                ]
+            );
+        }
 
-        let long = home.path().join("a".repeat(200)).join("instance.sock");
-        assert!(matches!(
-            shell::check_instance(&long, &[]),
-            shell::Instance::Alone
-        ));
-        let lines = trace.take();
-        assert_eq!(lines.len(), 1, "{lines:#?}");
-        assert!(
-            lines[0].starts_with(
-                "INFO instance-check socket=instance.sock: WARN message=the instance socket /"
-            ) && lines[0].ends_with("/instance.sock cannot be used"),
-            "{lines:#?}"
-        );
-
+        // The running instance: the product's scheme is `test`, and the
+        // extension `tour` opens its URLs.
+        cx.update(|cx: &mut App| {
+            yard_ui::init(cx);
+            shell::set_url_scheme(cx, "test");
+            let tour = shell::Extension::new(cx, "tour").unwrap();
+            tour.on_open_url(cx, |_, _| {});
+            shell::extensions_loaded(cx);
+        });
         cx.add_empty_window();
-        let open = |cx: &mut App, request: &[u8]| {
-            shell::handle_instance_request(cx, request, &|_, _| {});
-        };
-        let with_urls =
-            shell::encode_request(&strings(&["dev", "yard://tour/a", "yard://guest/b"])).unwrap();
-        cx.update(|cx| open(cx, &with_urls));
+        trace.take();
+        let (requests, received) = futures::channel::mpsc::unbounded();
+        cx.update(|cx| shell::handle_instance_requests(cx, received, "test"));
+
+        let with_urls = strings(&[
+            "dev",
+            "test://tour/a?token=secret",
+            "other://x?token=secret",
+        ]);
+        requests
+            .unbounded_send(shell::encode_request(&with_urls).unwrap())
+            .unwrap();
+        cx.run_until_parked();
+        let lines = trace.take();
+        assert_eq!(
+            lines,
+            [
+                "INFO instance-request: DEBUG message=not a URL, ignored ignored=2",
+                "INFO instance-request: DEBUG message=received urls=1",
+                "INFO url-open scheme=test host=tour: DEBUG message=handled",
+                "INFO instance-request: DEBUG message=activation requested",
+            ]
+        );
+        assert!(lines.iter().all(|line| !line.contains("secret")));
+
+        requests
+            .unbounded_send(shell::encode_request(&[]).unwrap())
+            .unwrap();
+        cx.run_until_parked();
         assert_eq!(
             trace.take(),
             [
-                "INFO instance-request urls=2: DEBUG message=not a URL, ignored argument=dev",
-                "INFO instance-request urls=2: DEBUG message=opening the URLs",
+                "INFO instance-request: DEBUG message=received urls=0",
+                "INFO instance-request: DEBUG message=activation requested",
             ]
         );
 
-        cx.update(|cx| open(cx, &shell::encode_request(&[]).unwrap()));
-        assert_eq!(
-            trace.take(),
-            ["INFO instance-request urls=0: DEBUG message=activated"]
-        );
-
-        cx.update(|cx| open(cx, &[shell::REQUEST_VERSION + 1]));
+        requests
+            .unbounded_send(vec![shell::REQUEST_VERSION + 1])
+            .unwrap();
+        cx.run_until_parked();
         assert_eq!(
             trace.take(),
             [
@@ -204,5 +240,4 @@ fn one_instance_logs_what_each_start_and_request_does(cx: &mut TestAppContext) {
         records.iter().all(|record| record.starts_with("WARN ")),
         "refusals are warnings, never errors: {records:#?}"
     );
-    assert_eq!(records.len(), 3, "{records:#?}");
 }

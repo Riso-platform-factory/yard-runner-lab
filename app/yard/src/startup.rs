@@ -32,15 +32,15 @@ pub fn run(
     let (product, paths) = start_trace(product);
     // A second start hands its arguments over and exits before it opens the
     // log files, which belong to the running instance.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(not(target_os = "macos"))]
     let (instance, argument_urls) = one_instance(product, &paths);
     open_log_files(&paths);
     let extensions = extensions.to_vec();
     let app = gpui_platform::application().with_assets(yard_ui::Assets);
     let open_urls = Rc::new(RefCell::new(OpenUrls::default()));
-    // GPUI never calls `on_open_urls` on Linux, so the URLs given on the
-    // command line take the same way.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    // GPUI calls `on_open_urls` only on macOS, so elsewhere the URLs given
+    // on the command line take the same way.
+    #[cfg(not(target_os = "macos"))]
     if !argument_urls.is_empty() {
         deliver_urls(&open_urls, argument_urls);
     }
@@ -49,12 +49,9 @@ pub fn run(
         move |urls| deliver_urls(&open_urls, urls)
     });
     app.run(move |cx: &mut App| {
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        #[cfg(not(target_os = "macos"))]
         if let Some(listener) = instance {
-            let open_urls = open_urls.clone();
-            yard_shell::serve_instance_requests(cx, listener, move |_, urls| {
-                deliver_urls(&open_urls, urls)
-            });
+            yard_shell::serve_instance_requests(cx, listener, env!("PRODUCT_URL_SCHEME"));
         }
         init(cx, product, &paths, &extensions, menus, &open_urls);
         let session = yard_shell::saved_session(cx, &paths.session_file());
@@ -101,9 +98,10 @@ fn open_log_files(paths: &yard_paths::Paths) {
 }
 
 /// Hands the command line's arguments to the instance already running and
-/// exits, or else makes this start the one instance, and returns its
-/// listener with the arguments that are URLs.
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+/// exits, or else returns this start's listener, if it is the one instance,
+/// with the arguments that are URLs of the product's scheme. macOS keeps one
+/// instance and hands URLs over itself.
+#[cfg(not(target_os = "macos"))]
 fn one_instance(
     product: Product,
     paths: &yard_paths::Paths,
@@ -112,20 +110,23 @@ fn one_instance(
         .skip(1)
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
-    let listener = match yard_shell::check_instance(&paths.instance_socket(), &arguments) {
-        yard_shell::Instance::Sent => std::process::exit(0),
+    let listener = match yard_shell::check_instance(paths, &arguments) {
+        yard_shell::Instance::Forwarded => std::process::exit(0),
         yard_shell::Instance::Refused(reason) => {
             eprintln!("{} is already running: {reason}", product.name);
             std::process::exit(1)
         }
-        yard_shell::Instance::First(listener) => Some(listener),
-        yard_shell::Instance::Alone => None,
+        yard_shell::Instance::Listening(listener) => Some(listener),
+        yard_shell::Instance::Alone(_) => None,
     };
-    (listener, yard_shell::argument_urls(&arguments))
+    (
+        listener,
+        yard_shell::argument_urls(&arguments, env!("PRODUCT_URL_SCHEME")),
+    )
 }
 
-/// Opens URLs once the extensions are loaded: the system's, and on Linux and
-/// FreeBSD those of the command line and of later starts.
+/// Opens URLs once the extensions are loaded: the system's on macOS, and
+/// elsewhere those of the command line.
 fn deliver_urls(open_urls: &RefCell<OpenUrls>, urls: Vec<String>) {
     let mut listener = open_urls.borrow_mut();
     if let Some(app) = &listener.app {

@@ -112,6 +112,9 @@ jobs:
             second.log
             third.log
             fourth.log
+            fifth.log
+            race1.log
+            race2.log
             xfwm4.log
             headless.log
             headless-test.log
