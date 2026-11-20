@@ -1,5 +1,7 @@
 //! The window shell and extension component registry.
 
+mod instance;
+pub use instance::*;
 mod prompt;
 pub use prompt::*;
 mod shell;

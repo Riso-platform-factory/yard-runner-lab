@@ -19,6 +19,7 @@ yard_paths = { workspace = true, default-features = false }
 yard_settings = { workspace = true, default-features = false }
 yard_state.workspace = true
 yard_ui = { workspace = true, default-features = false }
+futures.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true

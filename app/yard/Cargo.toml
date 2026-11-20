@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = ["dev"]
-dev = ["yard_log/dev", "yard_product/dev", "yard_paths/dev", "yard_ui/dev", "yard_layout/dev", "yard_shell/dev", "yard_settings/dev", "yard_keymap/dev", "command_palette/dev", "yard_update/dev", "yard_build_config/dev", "dep:ui_gallery"]
+dev = ["yard_log/dev", "yard_product/dev", "yard_paths/dev", "yard_ui/dev", "yard_layout/dev", "yard_shell/dev", "yard_settings/dev", "yard_keymap/dev", "command_palette/dev", "yard_update/dev", "yard_build_config/dev"]
 
 [dependencies]
 gpui.workspace = true
@@ -24,8 +24,6 @@ yard_keymap = { workspace = true, default-features = false }
 tracing = { workspace = true }
 
 command_palette = { workspace = true, default-features = false }
-# The UI kit's gallery, for the part under review in `cargo run dev`.
-ui_gallery = { path = "../../examples/ui_gallery", optional = true }
 
 yard_update = { workspace = true, default-features = false }
 reqwest_client = { workspace = true }

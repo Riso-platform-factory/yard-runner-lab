@@ -115,3 +115,18 @@ The `tooltip` page has buttons with every kind of tooltip: a title, a title with
 | Rest on `Long` | The title wrapped to two lines. |
 | Move away, or press the button | The tooltip goes. |
 | `{"theme": {"mode": "light"}}` | The box follows the theme. |
+
+## Feature 11: window-controls
+
+The `window-controls` page shows the window buttons that Linux draws:
+- **Under `LAYOUT`:** the default layout (minimize, maximize, close) and the left layout (`close,minimize,maximize:`).
+- **Under `STATE`:** maximized, where restore replaces maximize, and each button drawn hovered.
+
+Clicking a button acts on the gallery's own window, so close closes it. On macOS the page shows the same buttons, though a macOS window never draws them.
+
+| Command and action | What to look for |
+|---|---|
+| `UI_GALLERY=all cargo run dev`, open the `window-controls` tab | The page as described. `gallery-build{pages=11}`. |
+| `UI_GALLERY=window-controls cargo run dev` | The page alone. `gallery-build{pages=1}`. |
+| Click minimize | `window-control{action=minimize}` with `minimizing`. |
+| `{"theme": {"mode": "light"}}` | The icons and their hover follow the theme. |

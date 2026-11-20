@@ -131,7 +131,11 @@ The app, the zip, and the disk image are all made inside a staging folder in `--
 These change engines that are in production today. Each change goes to the user for approval before it is stamped again.
 
 - **Window controls (`yard_ui`'s title bar).** They are drawn as Zed's `platform_title_bar` draws them:
-  - **Linux.** Client-side decorations: minimize, maximize, and close in the desktop's button layout. Double-click maximizes, right-click opens the window menu, and the edges resize, as Zed's `client_side_decorations` does.
+  - **Linux.** Client-side decorations, as Zed's `client_side_decorations` does:
+    - minimize, maximize, and close in the desktop's button layout;
+    - double-click maximizes, right-click opens the window menu, dragging the bar moves, and the edges resize;
+    - a shadow, and rounded corners when not tiled, over a transparent window background.
+  - **When GPUI falls back to the system frame.** On X11, GPUI draws them only when a compositing window manager supports `_GTK_FRAME_EXTENTS` (as GNOME, KDE, and Xfce do); otherwise the window manager's own frame is used. On Wayland they are always drawn.
   - **Windows.** The three caption buttons are drawn with Segoe Fluent Icons, and GPUI's `WindowControlArea` hit-testing does the rest.
   - **The GPL boundary.** What is copied from Zed's GPL crates (`platform_title_bar`, `workspace`) stays inside `yard_ui`, with its notices, as the GPL boundary requires.
 - **Window options.**

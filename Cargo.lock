@@ -7867,7 +7867,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
- "ui_gallery",
  "yard_build_config",
  "yard_keymap",
  "yard_layout",
@@ -7963,6 +7962,7 @@ dependencies = [
 name = "yard_shell"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gpui",
  "log",
  "serde",

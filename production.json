@@ -14,7 +14,7 @@
   },
   "yard/startup": {
     "files": {
-      "app/yard/src/startup.rs": "73a80fd91147ac93"
+      "app/yard/src/startup.rs": "54f42a3d52673c7d"
     },
     "promoted": "2026-11-20"
   },
@@ -175,9 +175,9 @@
   },
   "yard_shell/shell": {
     "files": {
-      "crates/yard_shell/src/shell.rs": "3fd867885d0b4c5f"
+      "crates/yard_shell/src/shell.rs": "50e978465fcfc025"
     },
-    "promoted": "2026-11-19"
+    "promoted": "2026-11-20"
   },
   "yard_shell/window_bounds": {
     "files": {
@@ -205,9 +205,15 @@
   },
   "yard_ui/button": {
     "files": {
-      "crates/yard_ui/src/button.rs": "ef50685ad5d69b12"
+      "crates/yard_ui/src/button.rs": "d846da7e68a476ea"
     },
-    "promoted": "2026-11-15"
+    "promoted": "2026-11-20"
+  },
+  "yard_ui/client_decorations": {
+    "files": {
+      "crates/yard_ui/src/client_decorations.rs": "4eeb1a9f79da80b9"
+    },
+    "promoted": "2026-11-20"
   },
   "yard_ui/divider": {
     "files": {
@@ -217,9 +223,9 @@
   },
   "yard_ui/icon": {
     "files": {
-      "crates/yard_ui/src/icon.rs": "430b85085e2690a3"
+      "crates/yard_ui/src/icon.rs": "e2c8bd17359d3ad7"
     },
-    "promoted": "2026-11-15"
+    "promoted": "2026-11-20"
   },
   "yard_ui/key_hint": {
     "files": {
@@ -265,9 +271,9 @@
   },
   "yard_ui/status_bar": {
     "files": {
-      "crates/yard_ui/src/status_bar.rs": "3962fe9b074df48c"
+      "crates/yard_ui/src/status_bar.rs": "07b173b53f1616cd"
     },
-    "promoted": "2026-11-14"
+    "promoted": "2026-11-20"
   },
   "yard_ui/tabs": {
     "files": {
@@ -310,9 +316,9 @@
   },
   "yard_ui/title_bar": {
     "files": {
-      "crates/yard_ui/src/title_bar.rs": "abc728b1265e5bd2"
+      "crates/yard_ui/src/title_bar.rs": "4d6d9459bb63375e"
     },
-    "promoted": "2026-11-14"
+    "promoted": "2026-11-20"
   },
   "yard_ui/toast_layer": {
     "files": {
@@ -331,6 +337,12 @@
       "crates/yard_ui/src/user_themes.rs": "2b41c1d33d199b2c"
     },
     "promoted": "2026-11-14"
+  },
+  "yard_ui/window_controls": {
+    "files": {
+      "crates/yard_ui/src/window_controls.rs": "3744bc1749349491"
+    },
+    "promoted": "2026-11-20"
   },
   "yard_update/check": {
     "files": {

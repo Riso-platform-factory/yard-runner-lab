@@ -80,6 +80,7 @@ jobs:
           sleep 3; import -window root screenshot-later.png
           ls -R ~/.config/yard ~/.local/share/yard > dirs.txt 2>&1 || true
           bash .github/scripts/linux-controls.sh || true
+          bash .github/scripts/linux-instance.sh || true
           pkill -f target/debug/yard || true
       - name: Headless screenshot of the production window
         if: steps.build.outcome == 'success'
@@ -106,6 +107,11 @@ jobs:
             headless.png
             gallery.png
             controls.txt
+            instance.txt
+            first.log
+            second.log
+            third.log
+            fourth.log
             xfwm4.log
             headless.log
             headless-test.log
