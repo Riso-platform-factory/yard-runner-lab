@@ -97,20 +97,20 @@ fn open_log_files(paths: &yard_paths::Paths) {
     yard_log::open_files(paths.logs_dir());
 }
 
-/// Hands the command line's arguments to the instance already running and
-/// exits, or else returns this start's listener, if it is the one instance,
-/// with the arguments that are URLs of the product's scheme. macOS keeps one
-/// instance and hands URLs over itself.
+/// Hands the command line's URLs to the instance already running and exits,
+/// or else returns this start's listener, if it is the one instance, with
+/// the URLs. macOS keeps one instance and hands URLs over itself.
 #[cfg(not(target_os = "macos"))]
 fn one_instance(
     product: Product,
     paths: &yard_paths::Paths,
 ) -> (Option<yard_shell::InstanceListener>, Vec<String>) {
-    let arguments: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|argument| argument.to_string_lossy().into_owned())
-        .collect();
-    let listener = match yard_shell::check_instance(paths, &arguments) {
+    let (instance, urls) = yard_shell::start_instance(
+        paths,
+        std::env::args_os().skip(1),
+        env!("PRODUCT_URL_SCHEME"),
+    );
+    let listener = match instance {
         yard_shell::Instance::Forwarded => std::process::exit(0),
         yard_shell::Instance::Refused(reason) => {
             eprintln!("{} is already running: {reason}", product.name);
@@ -119,10 +119,7 @@ fn one_instance(
         yard_shell::Instance::Listening(listener) => Some(listener),
         yard_shell::Instance::Alone(_) => None,
     };
-    (
-        listener,
-        yard_shell::argument_urls(&arguments, env!("PRODUCT_URL_SCHEME")),
-    )
+    (listener, urls)
 }
 
 /// Opens URLs once the extensions are loaded: the system's on macOS, and

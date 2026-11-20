@@ -129,6 +129,9 @@ fn one_instance_logs_what_each_start_and_request_does(cx: &mut TestAppContext) {
         {
             // A socket left by an instance that ended without removing it.
             std::fs::create_dir_all(paths.instance_dir()).unwrap();
+            let normal =
+                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755);
+            std::fs::set_permissions(paths.data_dir(), normal).unwrap();
             // Wider than the instance allows, whatever the umask.
             let wide =
                 <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755);

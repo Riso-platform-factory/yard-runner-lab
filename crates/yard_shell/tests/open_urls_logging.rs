@@ -223,8 +223,17 @@ fn url_open_in(stack: &[String], count: usize, scheme: &str, host: &str) -> bool
             && pair[0].contains(&format!("count={count}"))
             && pair[1].starts_with("url-open")
             && pair[1].contains(&format!("scheme={scheme}"))
-            && pair[1].contains(&format!("host={host}"))
+            && host_is(&pair[1], host)
     })
+}
+
+// The group names `host`, or, when `host` is empty, no host at all.
+fn host_is(label: &str, host: &str) -> bool {
+    if host.is_empty() {
+        !label.contains("host=")
+    } else {
+        label.contains(&format!("host={host}"))
+    }
 }
 
 // The event was recorded while `url-open{scheme, host}` was entered.
@@ -232,7 +241,7 @@ fn in_url_open(stack: &[String], scheme: &str, host: &str) -> bool {
     stack.iter().any(|label| {
         label.starts_with("url-open")
             && label.contains(&format!("scheme={scheme}"))
-            && label.contains(&format!("host={host}"))
+            && host_is(label, host)
     })
 }
 
@@ -371,11 +380,12 @@ fn open_urls_logging_covers_the_contract_rows(cx: &mut TestAppContext) {
             &[
                 "test://tour/again?token=secret",
                 "https://tour/mixed?token=secret",
-                "test://nobody/y?token=secret",
+                "test://secret-token/y?token=secret",
             ],
         );
         let stacks = trace.stacks_since(stacks_mark);
-        for (scheme, host) in [("test", "tour"), ("https", "tour"), ("test", "nobody")] {
+        // A host that names no extension is left out of the group.
+        for (scheme, host) in [("test", "tour"), ("https", "tour"), ("test", "")] {
             assert!(
                 stacks
                     .iter()
@@ -394,7 +404,7 @@ fn open_urls_logging_covers_the_contract_rows(cx: &mut TestAppContext) {
         );
         for (scheme, host, reason) in [
             ("https", "tour", "reason="),
-            ("test", "nobody", "reason=no extension nobody"),
+            ("test", "", "reason=no such extension"),
         ] {
             assert!(
                 refused(&events, scheme, host, reason),
@@ -429,7 +439,15 @@ fn open_urls_logging_covers_the_contract_rows(cx: &mut TestAppContext) {
         .map(String::as_str)
         .collect();
     for needle in [
-        "hello", "world", "again", "mixed", "token", "secret", "qq", "zz9",
+        "hello",
+        "world",
+        "again",
+        "mixed",
+        "token",
+        "secret",
+        "qq",
+        "zz9",
+        "secret-token",
     ] {
         assert!(
             texts.iter().all(|text| !text.contains(needle)),

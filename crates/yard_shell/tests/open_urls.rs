@@ -271,7 +271,7 @@ fn each_refused_url_gets_one_refused_with_its_reason_and_nothing_else(cx: &mut T
         for (url, reason) in [
             ("https://tour/hello", None),
             ("test:///hello", None),
-            ("test://nobody/x", Some("no extension nobody")),
+            ("test://nobody/x", Some("no such extension")),
             ("test://quiet/x", None),
             ("not a url", None),
         ] {

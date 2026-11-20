@@ -28,3 +28,14 @@ export YARD_HOME=$(mktemp -d)
 $Y > race1.log 2>&1 & A=$!; $Y > race2.log 2>&1 & B=$!; sleep 8
 say "race: running=$( (kill -0 $A 2>/dev/null && echo A); (kill -0 $B 2>/dev/null && echo B) | tr '\n' ' ')"
 kill $A $B 2>/dev/null; sleep 1
+# Under umask 002, a fresh install keeps one instance.
+export YARD_HOME=$(mktemp -d)
+( umask 002; $Y > umask1.log 2>&1 & echo $! > /tmp/u1 ); sleep 6
+( umask 002; $Y "yard://nobody/u" > umask2.log 2>&1; echo $? > /tmp/u2 )
+say "umask 002: data folder $(stat -c '%A' $YARD_HOME/data), second start exit=$(cat /tmp/u2)"
+kill $(cat /tmp/u1); sleep 1
+# A group-writable data folder of another group: run alone, with a warning.
+export YARD_HOME=$(mktemp -d); mkdir -p $YARD_HOME/data; chmod 0775 $YARD_HOME/data; sudo chgrp adm $YARD_HOME/data
+$Y > othergroup.log 2>&1 & OG=$!; sleep 6
+say "other group: $(stat -c '%A %G' $YARD_HOME/data), running=$(kill -0 $OG 2>/dev/null && echo yes || echo no), warn=$(grep -c 'WARN.*instance' othergroup.log)"
+kill $OG; sleep 1

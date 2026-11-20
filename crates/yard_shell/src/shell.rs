@@ -5056,15 +5056,14 @@ pub fn set_url_scheme(cx: &mut App, scheme: &str) {
 
 /// Queues URLs received from the platform and dispatches them when ready.
 pub fn open_urls(cx: &mut App, urls: Vec<String>) {
-    let routing = &mut cx.default_global::<Registry>().urls;
-    if !routing.extensions_loaded {
+    if !cx.default_global::<Registry>().urls.extensions_loaded {
         let _group = tracing::info_span!("urls-open", count = urls.len()).entered();
         for url in &urls {
-            let _group = url_span(url_parts(url)).entered();
+            let _group = url_span(cx, url_parts(url)).entered();
             tracing::debug!("kept until extensions load");
         }
     }
-    routing.pending.push_back(urls);
+    cx.global_mut::<Registry>().urls.pending.push_back(urls);
     drain_urls(cx);
 }
 
@@ -5102,7 +5101,7 @@ fn drain_urls(cx: &mut App) {
 
 fn dispatch_url(cx: &mut App, url: &str) {
     let parts = url_parts(url);
-    let _group = url_span(parts).entered();
+    let _group = url_span(cx, parts).entered();
     match url_handler(cx, parts) {
         Ok(handler) => {
             handler(url, cx);
@@ -5123,7 +5122,8 @@ fn url_handler(cx: &App, parts: Option<(&str, &str)>) -> Result<UrlHandler, Stri
     }
     let name = host.to_ascii_lowercase();
     if !registry.extensions.contains(&name) {
-        return Err(format!("no extension {host}"));
+        // A host that names no extension may be anything, a secret too.
+        return Err("no such extension".into());
     }
     registry
         .urls
@@ -5133,9 +5133,18 @@ fn url_handler(cx: &App, parts: Option<(&str, &str)>) -> Result<UrlHandler, Stri
         .ok_or_else(|| format!("no handler for extension {host}"))
 }
 
-fn url_span(parts: Option<(&str, &str)>) -> tracing::Span {
+/// The group of one URL. It names the host only when the host names a
+/// registered extension, since any other host may be anything, a secret too.
+fn url_span(cx: &App, parts: Option<(&str, &str)>) -> tracing::Span {
     let (scheme, host) = parts.unwrap_or_default();
-    tracing::info_span!("url-open", scheme, host)
+    let known = cx
+        .try_global::<Registry>()
+        .is_some_and(|registry| registry.extensions.contains(&host.to_ascii_lowercase()));
+    if known {
+        tracing::info_span!("url-open", scheme, host)
+    } else {
+        tracing::info_span!("url-open", scheme)
+    }
 }
 
 fn url_parts(url: &str) -> Option<(&str, &str)> {

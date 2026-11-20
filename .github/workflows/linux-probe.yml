@@ -115,6 +115,9 @@ jobs:
             fifth.log
             race1.log
             race2.log
+            umask1.log
+            umask2.log
+            othergroup.log
             xfwm4.log
             headless.log
             headless-test.log

@@ -98,11 +98,53 @@ fn only_urls_of_the_product_scheme_are_urls() {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // A home whose data folder is as a normal home has it, whatever the umask.
+    fn home() -> (tempfile::TempDir, yard_paths::Paths) {
+        let home = tempfile::tempdir().unwrap();
+        let paths = yard_paths::Paths::under(home.path());
+        std::fs::create_dir(paths.data_dir()).unwrap();
+        std::fs::set_permissions(paths.data_dir(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        (home, paths)
+    }
+
+    #[test]
+    fn a_second_start_sends_only_its_urls() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let (_home, paths) = home();
+        std::fs::create_dir(paths.instance_dir()).unwrap();
+        std::fs::set_permissions(paths.instance_dir(), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        let running = std::os::unix::net::UnixDatagram::bind(paths.instance_socket()).unwrap();
+        let arguments = vec![
+            "dev".into(),
+            "yard://tour/a?token=secret".into(),
+            "--flag=secret".into(),
+            std::ffi::OsString::from_vec(vec![b'y', b':', 0xff]),
+        ];
+        let (instance, urls) = shell::start_instance(&paths, arguments, "yard");
+        assert!(matches!(instance, shell::Instance::Forwarded));
+        assert_eq!(urls, ["yard://tour/a?token=secret"]);
+        let mut buffer = vec![0; 1024];
+        let len = running.recv(&mut buffer).unwrap();
+        assert_eq!(
+            shell::decode_request(&buffer[..len]).unwrap(),
+            ["yard://tour/a?token=secret"]
+        );
+
+        // Without URLs the request is empty: the running instance comes to
+        // the front.
+        let (instance, urls) = shell::start_instance(&paths, vec!["dev".into()], "yard");
+        assert!(matches!(instance, shell::Instance::Forwarded));
+        assert!(urls.is_empty());
+        let len = running.recv(&mut buffer).unwrap();
+        assert!(shell::decode_request(&buffer[..len]).unwrap().is_empty());
+    }
 
     #[test]
     fn the_first_start_listens_and_the_second_hands_over() {
-        let home = tempfile::tempdir().unwrap();
-        let paths = yard_paths::Paths::under(home.path());
+        let (_home, paths) = home();
         let shell::Instance::Listening(_first) = shell::check_instance(&paths, &[]) else {
             panic!("the first start listens");
         };
@@ -117,8 +159,7 @@ mod linux {
     // is sent here; the listener's thread is tested in `src/instance/tests.rs`.
     #[gpui::test]
     fn the_socket_is_removed_on_quit(cx: &mut TestAppContext) {
-        let home = tempfile::tempdir().unwrap();
-        let paths = yard_paths::Paths::under(home.path());
+        let (_home, paths) = home();
         let shell::Instance::Listening(listener) = shell::check_instance(&paths, &[]) else {
             panic!("the first start listens");
         };

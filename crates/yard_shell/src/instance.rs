@@ -141,6 +141,25 @@ pub struct InstanceListener {
     never: std::convert::Infallible,
 }
 
+/// Hands the command line's URLs of the product's `scheme` to the instance
+/// already running, or, when none runs, makes this start the one instance.
+/// The other arguments are never sent; with no URL, the running instance
+/// only comes to the front. Returns the URLs too, for this start to open
+/// when it is the one instance.
+pub fn start_instance(
+    paths: &yard_paths::Paths,
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+    scheme: &str,
+) -> (Instance, Vec<String>) {
+    // An argument that is not UTF-8 is no URL; it stays to be counted.
+    let arguments: Vec<String> = arguments
+        .into_iter()
+        .map(|argument| argument.into_string().unwrap_or_default())
+        .collect();
+    let urls = argument_urls(&arguments, scheme);
+    (check_instance(paths, &urls), urls)
+}
+
 /// Hands the arguments to the instance already running, or, when none runs,
 /// makes this start the one instance.
 pub fn check_instance(paths: &yard_paths::Paths, arguments: &[String]) -> Instance {
@@ -212,10 +231,13 @@ fn handle_request(cx: &mut App, request: &[u8], scheme: &str) {
     activate_main_window(cx);
 }
 
-/// Asks the system to bring the first window, the one that keeps
-/// `window.json`, to the front.
+/// Asks the system to bring to the front the window the user last used, or
+/// else the first.
 fn activate_main_window(cx: &mut App) {
-    let Some(window) = cx.windows().into_iter().next() else {
+    let Some(window) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+    else {
         tracing::debug!("no window to activate");
         return;
     };
@@ -244,6 +266,7 @@ mod unix {
         Instance, InstanceListener, MAX_REQUEST_LEN, RequestError, encode_request,
         handle_instance_requests,
     };
+    use futures::channel::mpsc::UnboundedReceiver;
     use gpui::App;
     use std::{
         fs,
@@ -256,20 +279,89 @@ mod unix {
             net::{SocketAddr, UnixDatagram},
         },
         path::{Path, PathBuf},
+        time::Duration,
     };
+
+    /// How long a second start waits for a full queue of the running
+    /// instance before it gives up.
+    const SEND_TIMEOUT: Duration = Duration::from_secs(2);
 
     #[derive(Debug)]
     pub(super) struct Listener {
-        socket: UnixDatagram,
+        requests: UnboundedReceiver<Vec<u8>>,
         path: PathBuf,
-        id: (u64, u64),
+        lock: PathBuf,
+        id: SocketId,
     }
 
     impl Listener {
         #[cfg(test)]
-        pub(super) fn socket_for_tests(&self) -> &UnixDatagram {
-            &self.socket
+        pub(super) fn requests_for_tests(&mut self) -> &mut UnboundedReceiver<Vec<u8>> {
+            &mut self.requests
         }
+    }
+
+    /// What tells one socket at the instance path from another: its device
+    /// and inode, which Linux reuses as soon as a socket is removed, and the
+    /// modification time [`mark_socket`] gave it.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct SocketId {
+        dev: u64,
+        ino: u64,
+        mtime: i64,
+        mtime_nsec: i64,
+    }
+
+    impl SocketId {
+        pub(super) fn of(metadata: &fs::Metadata) -> Self {
+            Self {
+                dev: metadata.dev(),
+                ino: metadata.ino(),
+                mtime: metadata.mtime(),
+                mtime_nsec: metadata.mtime_nsec(),
+            }
+        }
+    }
+
+    /// Gives the socket at `path` a modification time of its own, which no
+    /// other socket bound there gets, even with the same inode within the
+    /// same clock tick, and returns its identity.
+    pub(super) fn mark_socket(path: &Path) -> std::io::Result<SocketId> {
+        use std::os::unix::ffi::OsStrExt as _;
+        static MARKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let mark = MARKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = now
+            .subsec_nanos()
+            .wrapping_add(std::process::id().wrapping_mul(2_654_435_761))
+            .wrapping_add(mark.wrapping_mul(7_919))
+            % 1_000_000_000;
+        let times = [
+            libc::timespec {
+                tv_sec: 0,
+                tv_nsec: libc::UTIME_OMIT,
+            },
+            libc::timespec {
+                tv_sec: now.as_secs() as libc::time_t,
+                tv_nsec: nanos as _,
+            },
+        ];
+        let path_c = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+        // SAFETY: `path_c` is NUL-terminated and `times` holds two values.
+        let result = unsafe {
+            libc::utimensat(
+                libc::AT_FDCWD,
+                path_c.as_ptr(),
+                times.as_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        fs::symlink_metadata(path).map(|metadata| SocketId::of(&metadata))
     }
 
     /// The user this process runs as.
@@ -279,10 +371,21 @@ mod unix {
     }
 
     /// Looks for the instance on `socket` and hands it the arguments, or,
-    /// when none listens, binds `socket`. The lock is held from the second
-    /// look to the bind, so two starts never both bind, and none removes
-    /// the socket of another that just bound it.
+    /// when none listens, binds `socket` and receives on a thread of its
+    /// own. The lock is held from the second look to the bind, so two
+    /// starts never both bind, and none removes the socket of another that
+    /// just bound it.
     pub(super) fn check(dir: &Path, socket: &Path, lock: &Path, arguments: &[String]) -> Instance {
+        check_with(dir, socket, lock, arguments, receive)
+    }
+
+    pub(super) fn check_with(
+        dir: &Path,
+        socket: &Path,
+        lock: &Path,
+        arguments: &[String],
+        spawn: impl FnOnce(UnixDatagram) -> std::io::Result<UnboundedReceiver<Vec<u8>>>,
+    ) -> Instance {
         let uid = own_uid();
         if let Err(error) = SocketAddr::from_pathname(socket) {
             return alone(format!(
@@ -296,19 +399,10 @@ mod unix {
         if let Some(instance) = send(socket, &request, uid) {
             return instance;
         }
-        let lock = match fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .open(lock)
-        {
+        let _lock = match take_lock(lock, uid) {
             Ok(lock) => lock,
-            Err(error) => return alone(format!("the instance lock cannot be opened ({error})")),
+            Err(reason) => return alone(reason),
         };
-        if let Err(error) = lock.lock() {
-            return alone(format!("the instance lock cannot be taken ({error})"));
-        }
         // Another start may have bound the socket while this one waited.
         if let Some(instance) = send(socket, &request, uid) {
             return instance;
@@ -343,9 +437,9 @@ mod unix {
             Err(error) => return alone(format!("the instance socket cannot be bound ({error})")),
         };
         let id = match fs::set_permissions(socket, fs::Permissions::from_mode(0o600))
-            .and_then(|()| fs::symlink_metadata(socket))
+            .and_then(|()| mark_socket(socket))
         {
-            Ok(metadata) => (metadata.dev(), metadata.ino()),
+            Ok(id) => id,
             Err(error) => {
                 drop(listener);
                 let _ = fs::remove_file(socket);
@@ -354,11 +448,21 @@ mod unix {
                 ));
             }
         };
+        let requests = match spawn(listener) {
+            Ok(requests) => requests,
+            Err(error) => {
+                let _ = fs::remove_file(socket);
+                let reason = format!("the instance listener did not start ({error})");
+                log::error!("{reason}; running without a single instance");
+                return Instance::Alone(reason);
+            }
+        };
         tracing::debug!("listening");
         Instance::Listening(InstanceListener {
             inner: Listener {
-                socket: listener,
+                requests,
                 path: socket.to_owned(),
+                lock: lock.to_owned(),
                 id,
             },
         })
@@ -369,8 +473,31 @@ mod unix {
         Instance::Alone(reason)
     }
 
+    /// Opens and takes the lock at `path`, which must be a file of `uid`.
+    /// It never follows a link, and never waits on a FIFO left there.
+    pub(super) fn take_lock(path: &Path, uid: u32) -> Result<fs::File, String> {
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|error| format!("the instance lock cannot be opened ({error})"))?;
+        let metadata = lock
+            .metadata()
+            .map_err(|error| format!("the instance lock cannot be read ({error})"))?;
+        if !metadata.is_file() || metadata.uid() != uid {
+            return Err("the instance lock's path holds something else".into());
+        }
+        lock.lock()
+            .map_err(|error| format!("the instance lock cannot be taken ({error})"))?;
+        Ok(lock)
+    }
+
     /// Sends the request to the instance listening on `socket`, and says
-    /// what came of it, or `None` when no instance listens there.
+    /// what came of it, or `None` when no instance listens there, or one
+    /// may be starting.
     fn send(socket: &Path, request: &Result<Vec<u8>, RequestError>, uid: u32) -> Option<Instance> {
         match fs::symlink_metadata(socket) {
             Err(error) if error.kind() == ErrorKind::NotFound => return None,
@@ -387,7 +514,11 @@ mod unix {
             }
             Ok(_) => {}
         }
-        let sender = match UnixDatagram::unbound() {
+        let sender = match UnixDatagram::unbound().and_then(|sender| {
+            sender
+                .set_write_timeout(Some(SEND_TIMEOUT))
+                .map(|()| sender)
+        }) {
             Ok(sender) => sender,
             Err(error) => {
                 return Some(alone(format!(
@@ -397,10 +528,14 @@ mod unix {
         };
         match sender.connect(socket) {
             Ok(()) => {}
+            // Refused: a stale socket. Denied: a socket bound but not yet
+            // made private, so its instance is starting.
             Err(error)
                 if matches!(
                     error.kind(),
-                    ErrorKind::ConnectionRefused | ErrorKind::NotFound
+                    ErrorKind::ConnectionRefused
+                        | ErrorKind::NotFound
+                        | ErrorKind::PermissionDenied
                 ) =>
             {
                 return None;
@@ -436,11 +571,58 @@ mod unix {
         metadata.file_type().is_socket() && metadata.uid() == uid
     }
 
-    /// Makes `dir` a folder of `uid` that only `uid` may enter.
+    /// The group this process runs as.
+    pub(super) fn own_egid() -> u32 {
+        // SAFETY: `getegid` has no preconditions and cannot fail.
+        unsafe { libc::getegid() }
+    }
+
+    /// Whether no one but `uid` can swap what the data folder holds: it
+    /// belongs to `uid`, others may not write to it, and its group may write
+    /// to it only when that group is `egid`, a group of the user's own as
+    /// Ubuntu gives each user.
+    pub(super) fn data_folder_is_safe(
+        mode: u32,
+        owner: u32,
+        group: u32,
+        uid: u32,
+        egid: u32,
+    ) -> Result<(), String> {
+        if owner != uid {
+            return Err("the data folder belongs to another user".into());
+        }
+        if mode & 0o002 != 0 {
+            return Err("others may write to the data folder".into());
+        }
+        if mode & 0o020 != 0 && group != egid {
+            return Err("another group may write to the data folder".into());
+        }
+        Ok(())
+    }
+
+    /// Makes `dir` a folder of `uid` that only `uid` may enter, in a folder
+    /// of `uid` that no one else may write to, so no one can swap it.
     pub(super) fn private_folder(dir: &Path, uid: u32) -> Result<(), String> {
         if let Some(parent) = dir.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("the data folder cannot be created ({error})"))?;
+            if !parent.exists() {
+                // A data folder this start makes is private whatever the
+                // umask, so a fresh install never has it group-writable.
+                fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(parent)
+                    .and_then(|()| fs::set_permissions(parent, fs::Permissions::from_mode(0o700)))
+                    .map_err(|error| format!("the data folder cannot be created ({error})"))?;
+            }
+            let metadata = fs::metadata(parent)
+                .map_err(|error| format!("the data folder cannot be read ({error})"))?;
+            data_folder_is_safe(
+                metadata.mode(),
+                metadata.uid(),
+                metadata.gid(),
+                uid,
+                own_egid(),
+            )?;
         }
         match fs::DirBuilder::new().mode(0o700).create(dir) {
             Ok(()) => {}
@@ -466,24 +648,32 @@ mod unix {
     }
 
     pub(super) fn serve(cx: &mut App, listener: Listener, scheme: &str) {
-        let Listener { socket, path, id } = listener;
-        match receive(socket) {
-            Ok(requests) => handle_instance_requests(cx, requests, scheme),
-            Err(error) => log::warn!(
-                "the instance listener did not start ({error}); later starts are not received"
-            ),
-        }
+        let Listener {
+            requests,
+            path,
+            lock,
+            id,
+        } = listener;
+        handle_instance_requests(cx, requests, scheme);
         cx.on_app_quit(move |_| {
-            remove_own_socket(&path, id);
+            remove_own_socket(&path, &lock, id);
             async {}
         })
         .detach();
     }
 
-    /// Removes the socket at `path` if it is still the one with `id`.
-    pub(super) fn remove_own_socket(path: &Path, id: (u64, u64)) {
+    /// Removes the socket at `path` if it is still the one with `id`, under
+    /// the lock, so that no start binds it between the check and the removal.
+    pub(super) fn remove_own_socket(path: &Path, lock: &Path, id: SocketId) {
+        let _lock = match take_lock(lock, own_uid()) {
+            Ok(lock) => lock,
+            Err(reason) => {
+                log::warn!("the instance socket was left: {reason}");
+                return;
+            }
+        };
         match fs::symlink_metadata(path) {
-            Ok(metadata) if (metadata.dev(), metadata.ino()) == id => {
+            Ok(metadata) if SocketId::of(&metadata) == id => {
                 if let Err(error) = fs::remove_file(path) {
                     log::warn!("the instance socket was not removed: {error}");
                 }
@@ -495,9 +685,7 @@ mod unix {
     }
 
     /// Receives each datagram on a thread of its own, and sends it on.
-    pub(super) fn receive(
-        socket: UnixDatagram,
-    ) -> std::io::Result<futures::channel::mpsc::UnboundedReceiver<Vec<u8>>> {
+    pub(super) fn receive(socket: UnixDatagram) -> std::io::Result<UnboundedReceiver<Vec<u8>>> {
         let (tx, rx) = futures::channel::mpsc::unbounded();
         std::thread::Builder::new()
             .name("instance-listener".into())

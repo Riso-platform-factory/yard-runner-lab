@@ -3,13 +3,16 @@
 
 use super::{
     Instance, decode_request,
-    unix::{check, is_own_socket, own_uid, private_folder, receive, remove_own_socket},
+    unix::{
+        SocketId, check, check_with, data_folder_is_safe, is_own_socket, mark_socket, own_egid,
+        own_uid, private_folder, receive, remove_own_socket, take_lock,
+    },
 };
 use futures::StreamExt as _;
 use std::{
     fs,
     os::unix::{
-        fs::{MetadataExt as _, PermissionsExt as _},
+        fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _},
         net::UnixDatagram,
     },
     path::{Path, PathBuf},
@@ -25,6 +28,9 @@ struct Home {
 fn home() -> Home {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path().join("data/instance");
+    // The data folder as a normal home has it, whatever the umask.
+    fs::create_dir(temp.path().join("data")).unwrap();
+    fs::set_permissions(temp.path().join("data"), fs::Permissions::from_mode(0o755)).unwrap();
     Home {
         socket: dir.join("instance.sock"),
         lock: dir.join("instance.lock"),
@@ -48,7 +54,7 @@ fn mode(path: &Path) -> u32 {
 #[test]
 fn the_first_start_listens_in_a_private_folder_and_the_second_hands_over() {
     let home = home();
-    let Instance::Listening(first) = check_in(&home, &[]) else {
+    let Instance::Listening(mut first) = check_in(&home, &[]) else {
         panic!("the first start listens");
     };
     assert_eq!(mode(&home.dir), 0o700);
@@ -57,12 +63,8 @@ fn the_first_start_listens_in_a_private_folder_and_the_second_hands_over() {
         check_in(&home, &["yard://tour/a", "dev"]),
         Instance::Forwarded
     ));
-    let mut buffer = vec![0; 1024];
-    let len = first.inner.socket_for_tests().recv(&mut buffer).unwrap();
-    assert_eq!(
-        decode_request(&buffer[..len]).unwrap(),
-        ["yard://tour/a", "dev"]
-    );
+    let request = futures::executor::block_on(first.inner.requests_for_tests().next()).unwrap();
+    assert_eq!(decode_request(&request).unwrap(), ["yard://tour/a", "dev"]);
 }
 
 #[test]
@@ -186,17 +188,18 @@ fn only_the_same_socket_is_removed_on_quit() {
     let home = home();
     fs::create_dir_all(&home.dir).unwrap();
     let first = UnixDatagram::bind(&home.socket).unwrap();
-    let metadata = fs::symlink_metadata(&home.socket).unwrap();
-    let id = (metadata.dev(), metadata.ino());
+    let first_id = mark_socket(&home.socket).unwrap();
     drop(first);
     fs::remove_file(&home.socket).unwrap();
-    // Another instance bound the path since.
+    // Another instance bound the path since, at once, so that Linux may give
+    // it the same inode in the same clock tick.
     let _second = UnixDatagram::bind(&home.socket).unwrap();
-    remove_own_socket(&home.socket, id);
+    let second_id = mark_socket(&home.socket).unwrap();
+    assert_ne!(first_id, second_id);
+    remove_own_socket(&home.socket, &home.lock, first_id);
     assert!(home.socket.exists());
 
-    let metadata = fs::symlink_metadata(&home.socket).unwrap();
-    remove_own_socket(&home.socket, (metadata.dev(), metadata.ino()));
+    remove_own_socket(&home.socket, &home.lock, second_id);
     assert!(!home.socket.exists());
 }
 
@@ -235,4 +238,135 @@ fn the_largest_request_arrives_and_a_larger_one_shows_its_size() {
     assert_eq!(largest.len(), MAX_REQUEST_LEN);
     let larger = futures::executor::block_on(requests.next()).unwrap();
     assert!(larger.len() > MAX_REQUEST_LEN);
+}
+
+#[test]
+fn a_data_folder_others_may_write_to_runs_alone() {
+    let home = home();
+    let data = home.dir.parent().unwrap();
+    fs::set_permissions(data, fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(matches!(check_in(&home, &[]), Instance::Alone(_)));
+    assert!(!home.dir.exists());
+    fs::set_permissions(data, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(private_folder(&home.dir, own_uid() + 1).is_err());
+}
+
+#[test]
+fn a_group_may_write_to_the_data_folder_only_when_it_is_the_users_own() {
+    let (uid, egid) = (own_uid(), own_egid());
+    assert!(data_folder_is_safe(0o40755, uid, egid + 1, uid, egid).is_ok());
+    assert!(data_folder_is_safe(0o40775, uid, egid, uid, egid).is_ok());
+    assert!(data_folder_is_safe(0o40775, uid, egid + 1, uid, egid).is_err());
+    assert!(data_folder_is_safe(0o40757, uid, egid, uid, egid).is_err());
+    assert!(data_folder_is_safe(0o40700, uid + 1, egid, uid, egid).is_err());
+
+    // A real folder of the user's own group, group-writable, is used.
+    let home = home();
+    let data = home.dir.parent().unwrap();
+    if fs::metadata(data).unwrap().gid() == egid {
+        fs::set_permissions(data, fs::Permissions::from_mode(0o775)).unwrap();
+        let Instance::Listening(_first) = check_in(&home, &[]) else {
+            panic!("a data folder of the user's own group is used");
+        };
+    }
+}
+
+#[test]
+fn a_data_folder_the_start_makes_is_private() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("fresh/data/instance");
+    let Instance::Listening(_first) = check(
+        &dir,
+        &dir.join("instance.sock"),
+        &dir.join("instance.lock"),
+        &[],
+    ) else {
+        panic!("the first start listens");
+    };
+    assert_eq!(mode(dir.parent().unwrap()), 0o700);
+    assert_eq!(mode(&temp.path().join("fresh")), 0o700);
+}
+
+#[test]
+fn a_fifo_or_a_link_at_the_lock_path_never_holds_up_the_start() {
+    let home = home();
+    fs::create_dir_all(&home.dir).unwrap();
+    let path = std::ffi::CString::new(home.lock.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: `path` is a NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let started = std::time::Instant::now();
+    assert!(matches!(check_in(&home, &[]), Instance::Alone(_)));
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert!(
+        fs::symlink_metadata(&home.lock)
+            .unwrap()
+            .file_type()
+            .is_fifo()
+    );
+
+    fs::remove_file(&home.lock).unwrap();
+    let target = home.dir.join("target");
+    fs::write(&target, "").unwrap();
+    std::os::unix::fs::symlink(&target, &home.lock).unwrap();
+    assert!(take_lock(&home.lock, own_uid()).is_err());
+    assert!(matches!(check_in(&home, &[]), Instance::Alone(_)));
+
+    fs::remove_file(&home.lock).unwrap();
+    fs::write(&home.lock, "").unwrap();
+    assert!(take_lock(&home.lock, own_uid() + 1).is_err());
+    assert!(take_lock(&home.lock, own_uid()).is_ok());
+}
+
+#[test]
+fn a_listener_that_cannot_start_leaves_no_socket() {
+    let home = home();
+    let instance = check_with(&home.dir, &home.socket, &home.lock, &[], |_| {
+        Err(std::io::Error::other("no thread"))
+    });
+    assert!(matches!(instance, Instance::Alone(_)));
+    assert!(!home.socket.exists());
+    // The next start is the one instance.
+    let Instance::Listening(_first) = check_in(&home, &[]) else {
+        panic!("the next start listens");
+    };
+}
+
+#[test]
+fn a_full_queue_refuses_the_hand_off_in_time() {
+    let home = home();
+    fs::create_dir_all(&home.dir).unwrap();
+    // An instance that does not read: its queue fills up.
+    let _listener = UnixDatagram::bind(&home.socket).unwrap();
+    let filler = UnixDatagram::unbound().unwrap();
+    filler.connect(&home.socket).unwrap();
+    filler.set_nonblocking(true).unwrap();
+    while filler.send(b"\x01").is_ok() {}
+    let started = std::time::Instant::now();
+    match check_in(&home, &["yard://tour/a"]) {
+        Instance::Refused(_) => {}
+        other => panic!("a full queue refuses the hand-off: {other:?}"),
+    }
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn quitting_waits_for_a_start_that_holds_the_lock() {
+    let home = home();
+    let Instance::Listening(first) = check_in(&home, &[]) else {
+        panic!("the first start listens");
+    };
+    let id = SocketId::of(&fs::symlink_metadata(&home.socket).unwrap());
+    drop(first);
+    let held = take_lock(&home.lock, own_uid()).unwrap();
+    std::thread::scope(|scope| {
+        let quit = scope.spawn(|| remove_own_socket(&home.socket, &home.lock, id));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            home.socket.exists(),
+            "the socket is removed only under the lock"
+        );
+        drop(held);
+        quit.join().unwrap();
+    });
+    assert!(!home.socket.exists());
 }
