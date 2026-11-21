@@ -118,6 +118,7 @@ fn one_instance(
 ) -> (Option<yard_shell::InstanceListener>, Vec<String>) {
     let (instance, urls) = yard_shell::start_instance(
         paths,
+        product.identifier,
         std::env::args_os().skip(1),
         env!("PRODUCT_URL_SCHEME"),
     );

@@ -6,6 +6,9 @@ use gpui::{App, TestAppContext};
 use std::{cell::RefCell, rc::Rc};
 use yard_shell as shell;
 
+/// The product's identifier in these tests.
+const ID: &str = "test.yard.instance";
+
 fn strings(arguments: &[&str]) -> Vec<String> {
     arguments
         .iter()
@@ -95,6 +98,64 @@ fn only_urls_of_the_product_scheme_are_urls() {
     assert!(shell::argument_urls(&arguments, "").is_empty());
 }
 
+#[test]
+fn the_instance_name_is_the_installers_without_a_home() {
+    // No test sets this product's home variable, so its directories are
+    // the platform's.
+    let product = yard_product::Product {
+        name: "Instance Name Test",
+        version: "0",
+        identifier: ID,
+    };
+    let platform = yard_paths::Paths::from_env(&product);
+    assert_eq!(platform.origin(), yard_paths::Origin::Platform);
+    assert_eq!(
+        shell::instance_name(&platform, ID),
+        yard_product::instance_name(ID)
+    );
+    assert_eq!(
+        yard_product::instance_name(ID),
+        "test.yard.instance-instance"
+    );
+}
+
+#[test]
+fn each_home_has_an_instance_name_of_its_own() {
+    let one = yard_paths::Paths::under("one");
+    let other = yard_paths::Paths::under("other");
+    let name = shell::instance_name(&one, ID);
+    assert!(name.starts_with("test.yard.instance-instance-"), "{name}");
+    assert_eq!(
+        name,
+        shell::instance_name(&yard_paths::Paths::under("one"), ID)
+    );
+    assert_ne!(name, shell::instance_name(&other, ID));
+    assert_ne!(
+        shell::instance_name(&one, "test.yard.other"),
+        shell::instance_name(&one, ID)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn on_windows_the_first_start_listens_and_the_second_hands_over() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = yard_paths::Paths::under(home.path());
+    let shell::Instance::Listening(_first) = shell::check_instance(&paths, ID, &[]) else {
+        panic!("the first start listens");
+    };
+    assert!(matches!(
+        shell::check_instance(&paths, ID, &strings(&["yard://tour/a"])),
+        shell::Instance::Forwarded
+    ));
+    // Another home is another instance.
+    let other = tempfile::tempdir().unwrap();
+    let other = yard_paths::Paths::under(other.path());
+    let shell::Instance::Listening(_second) = shell::check_instance(&other, ID, &[]) else {
+        panic!("another home listens on its own");
+    };
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
@@ -123,7 +184,7 @@ mod linux {
             "--flag=secret".into(),
             std::ffi::OsString::from_vec(vec![b'y', b':', 0xff]),
         ];
-        let (instance, urls) = shell::start_instance(&paths, arguments, "yard");
+        let (instance, urls) = shell::start_instance(&paths, ID, arguments, "yard");
         assert!(matches!(instance, shell::Instance::Forwarded));
         assert_eq!(urls, ["yard://tour/a?token=secret"]);
         let mut buffer = vec![0; 1024];
@@ -135,7 +196,7 @@ mod linux {
 
         // Without URLs the request is empty: the running instance comes to
         // the front.
-        let (instance, urls) = shell::start_instance(&paths, vec!["dev".into()], "yard");
+        let (instance, urls) = shell::start_instance(&paths, ID, vec!["dev".into()], "yard");
         assert!(matches!(instance, shell::Instance::Forwarded));
         assert!(urls.is_empty());
         let len = running.recv(&mut buffer).unwrap();
@@ -145,12 +206,12 @@ mod linux {
     #[test]
     fn the_first_start_listens_and_the_second_hands_over() {
         let (_home, paths) = home();
-        let shell::Instance::Listening(_first) = shell::check_instance(&paths, &[]) else {
+        let shell::Instance::Listening(_first) = shell::check_instance(&paths, ID, &[]) else {
             panic!("the first start listens");
         };
         assert!(paths.instance_socket().exists());
         assert!(matches!(
-            shell::check_instance(&paths, &strings(&["yard://tour/a"])),
+            shell::check_instance(&paths, ID, &strings(&["yard://tour/a"])),
             shell::Instance::Forwarded
         ));
     }
@@ -160,7 +221,7 @@ mod linux {
     #[gpui::test]
     fn the_socket_is_removed_on_quit(cx: &mut TestAppContext) {
         let (_home, paths) = home();
-        let shell::Instance::Listening(listener) = shell::check_instance(&paths, &[]) else {
+        let shell::Instance::Listening(listener) = shell::check_instance(&paths, ID, &[]) else {
             panic!("the first start listens");
         };
         cx.update(|cx| shell::serve_instance_requests(cx, listener, "yard"));
@@ -173,13 +234,13 @@ mod linux {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 #[test]
 fn other_systems_run_without_one_instance() {
     let home = tempfile::tempdir().unwrap();
     let paths = yard_paths::Paths::under(home.path());
     assert!(matches!(
-        shell::check_instance(&paths, &[]),
+        shell::check_instance(&paths, ID, &[]),
         shell::Instance::Alone(_)
     ));
     assert!(!paths.instance_dir().exists());

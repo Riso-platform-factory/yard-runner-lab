@@ -9,6 +9,9 @@ use gpui::{App, TestAppContext};
 use std::sync::{Arc, Mutex};
 use yard_shell as shell;
 
+/// The product's identifier in this test.
+const ID: &str = "test.yard.instance-logging";
+
 static RECORDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 struct Diagnostics;
@@ -137,7 +140,7 @@ fn one_instance_logs_what_each_start_and_request_does(cx: &mut TestAppContext) {
                 <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755);
             std::fs::set_permissions(paths.instance_dir(), wide).unwrap();
             drop(std::os::unix::net::UnixDatagram::bind(paths.instance_socket()).unwrap());
-            let first = shell::check_instance(&paths, &[]);
+            let first = shell::check_instance(&paths, ID, &[]);
             assert!(matches!(first, shell::Instance::Listening(_)));
             assert_eq!(
                 trace.take(),
@@ -149,7 +152,7 @@ fn one_instance_logs_what_each_start_and_request_does(cx: &mut TestAppContext) {
             );
 
             let forwarded =
-                shell::check_instance(&paths, &strings(&["test://tour/a?token=secret"]));
+                shell::check_instance(&paths, ID, &strings(&["test://tour/a?token=secret"]));
             assert!(matches!(forwarded, shell::Instance::Forwarded));
             assert_eq!(
                 trace.take(),
@@ -158,7 +161,7 @@ fn one_instance_logs_what_each_start_and_request_does(cx: &mut TestAppContext) {
                 ]
             );
 
-            let refused = shell::check_instance(&paths, &["a".repeat(shell::MAX_REQUEST_LEN)]);
+            let refused = shell::check_instance(&paths, ID, &["a".repeat(shell::MAX_REQUEST_LEN)]);
             assert!(matches!(refused, shell::Instance::Refused(_)));
             assert_eq!(
                 trace.take(),
@@ -167,9 +170,55 @@ fn one_instance_logs_what_each_start_and_request_does(cx: &mut TestAppContext) {
                 ]
             );
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
         {
-            let alone = shell::check_instance(&paths, &[]);
+            // The group names the pipe, whose name ends with the session.
+            let pipe = format!("socket={}-", shell::instance_name(&paths, ID));
+            let lines = |lines: Vec<String>| -> Vec<String> {
+                lines
+                    .into_iter()
+                    // Windows may refuse the foreground to a test process.
+                    .filter(|line| !line.contains("may not take the foreground"))
+                    .map(|line| {
+                        let (group, rest) = line.split_once(": ").unwrap();
+                        let session = group.strip_prefix(&format!("INFO instance-check {pipe}"));
+                        assert!(
+                            session.is_some_and(|session| session.parse::<u32>().is_ok()),
+                            "{line}"
+                        );
+                        format!("INFO instance-check socket=PIPE: {rest}")
+                    })
+                    .collect()
+            };
+            let first = shell::check_instance(&paths, ID, &[]);
+            assert!(matches!(first, shell::Instance::Listening(_)));
+            assert_eq!(
+                lines(trace.take()),
+                ["INFO instance-check socket=PIPE: DEBUG message=listening"]
+            );
+
+            let forwarded =
+                shell::check_instance(&paths, ID, &strings(&["test://tour/a?token=secret"]));
+            assert!(matches!(forwarded, shell::Instance::Forwarded));
+            assert_eq!(
+                lines(trace.take()),
+                [
+                    "INFO instance-check socket=PIPE: DEBUG message=sent to the running instance bytes=28"
+                ]
+            );
+
+            let refused = shell::check_instance(&paths, ID, &["a".repeat(shell::MAX_REQUEST_LEN)]);
+            assert!(matches!(refused, shell::Instance::Refused(_)));
+            assert_eq!(
+                lines(trace.take()),
+                [
+                    "INFO instance-check socket=PIPE: WARN message=the running instance was not reached: the request is 65538 bytes, more than the 65536 the running instance reads"
+                ]
+            );
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
+        {
+            let alone = shell::check_instance(&paths, ID, &[]);
             assert!(matches!(alone, shell::Instance::Alone(_)));
             assert_eq!(
                 trace.take(),

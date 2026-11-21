@@ -10,12 +10,13 @@ path = "src/yard_shell.rs"
 
 [features]
 default = ["dev"]
-dev = ["yard_layout/dev", "yard_paths/dev", "yard_settings/dev", "yard_state/dev", "yard_ui/dev"]
+dev = ["yard_layout/dev", "yard_paths/dev", "yard_product/dev", "yard_settings/dev", "yard_state/dev", "yard_ui/dev"]
 
 [dependencies]
 gpui.workspace = true
 yard_layout = { workspace = true, default-features = false }
 yard_paths = { workspace = true, default-features = false }
+yard_product = { workspace = true, default-features = false }
 yard_settings = { workspace = true, default-features = false }
 yard_state.workspace = true
 yard_ui = { workspace = true, default-features = false }
@@ -27,6 +28,19 @@ tracing.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 tempfile.workspace = true
