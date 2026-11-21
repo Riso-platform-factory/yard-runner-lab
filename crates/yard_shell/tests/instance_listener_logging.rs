@@ -118,25 +118,35 @@ fn a_message_refused_by_the_listener_is_a_warning_in_its_group() {
         panic!("the first start listens");
     };
 
-    // SAFETY: the name is a valid string, and the handle is closed below.
-    let client = unsafe {
-        CreateFileW(
-            &HSTRING::from(pipe_name(&paths)),
-            FILE_GENERIC_WRITE.0,
-            FILE_SHARE_NONE,
-            None,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            None,
-        )
-    }
-    .unwrap();
-    let message = vec![1; shell::MAX_REQUEST_LEN + 1];
-    // The listener may drop the pipe before the whole message is written.
-    // SAFETY: `client` is an open pipe.
-    let _ = unsafe { WriteFile(client, Some(&message), None, None) };
-    // SAFETY: opened above, closed once.
-    unsafe { CloseHandle(client) }.unwrap();
+    // On a thread of its own, so that a write that blocks fails the test.
+    let pipe = pipe_name(&paths);
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // SAFETY: the name is a valid string, and the handle is closed below.
+        let client = unsafe {
+            CreateFileW(
+                &HSTRING::from(pipe),
+                FILE_GENERIC_WRITE.0,
+                FILE_SHARE_NONE,
+                None,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                None,
+            )
+        }
+        .unwrap();
+        let message = vec![1; shell::MAX_REQUEST_LEN + 1];
+        let mut written = 0;
+        // The listener may drop the pipe before the whole message is
+        // written, so the result is not checked.
+        // SAFETY: `client` is an open pipe, and `written` a valid place.
+        let _ = unsafe { WriteFile(client, Some(&message), Some(&mut written), None) };
+        // SAFETY: opened above, closed once.
+        unsafe { CloseHandle(client) }.unwrap();
+        let _ = done.send(());
+    });
+    wait.recv_timeout(Duration::from_secs(5))
+        .expect("the raw write did not end");
 
     let expected = "instance-request: WARN a request from another start was refused: the request is more than the 65536 bytes the running instance reads";
     let started = Instant::now();

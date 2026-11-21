@@ -3,7 +3,7 @@
 
 use super::{
     Instance, MAX_REQUEST_LEN, decode_request, encode_request,
-    windows::{Names, check, create_pipe, receive},
+    windows::{Handle, Names, Sent, check, create_pipe, hand_over, receive, send},
 };
 use ::windows::{
     Win32::{
@@ -201,7 +201,7 @@ fn a_start_that_wrote_and_closed_before_the_listener_connected_is_read() {
     let names = names();
     let pipe = create_pipe(&names.pipe).unwrap();
     write_raw(&names.pipe, b"\x01first\0");
-    let mut requests = receive(pipe).unwrap();
+    let mut requests = receive(pipe, Handle(hold_mutex(&names))).unwrap();
     assert_eq!(next_from(&mut requests), b"\x01first\0");
     // The listener goes on.
     write_raw(&names.pipe, b"\x01second\0");
@@ -267,12 +267,16 @@ fn a_start_that_connects_and_sends_nothing_is_given_up() {
     let mut first = check(&names, &[]);
     assert!(matches!(first, Instance::Listening(_)), "{first:?}");
     let silent = open_raw(&names.pipe);
-    // The listener gives the silent start two seconds, then serves again.
-    std::thread::sleep(Duration::from_millis(2500));
+    let opened = Instant::now();
+    // The listener gives the silent start two seconds, then serves again,
+    // within the next start's own two seconds.
+    std::thread::sleep(Duration::from_secs(1));
     assert!(matches!(
         check(&names, &strings(&["yard://tour/a"])),
         Instance::Forwarded
     ));
+    let blocked = opened.elapsed();
+    assert!(blocked < Duration::from_millis(2600), "{blocked:?}");
     assert_eq!(
         decode_request(&next_request(&mut first)).unwrap(),
         ["yard://tour/a"]
@@ -317,11 +321,43 @@ fn an_instance_that_ends_before_its_pipe_leaves_the_place_to_this_start() {
             close(HANDLE(mutex as _));
         })
     };
+    // The sender's side of a later start: it finds the mutex gone, whether
+    // before or while it waits for the pipe, and says so.
     let started = Instant::now();
-    let first = check(&names, &[]);
-    assert!(matches!(first, Instance::Listening(_)), "{first:?}");
+    let deadline = started + Duration::from_secs(2);
+    let sent = send(
+        &names.pipe,
+        &HSTRING::from(&names.mutex),
+        &encode_request(&[]),
+        deadline,
+    );
+    assert!(matches!(sent, Sent::Gone), "the sender saw the mutex go");
     assert!(started.elapsed() < Duration::from_millis(1500));
     closer.join().unwrap();
+    // Running the election again makes this start the instance.
+    let first = check(&names, &[]);
+    assert!(matches!(first, Instance::Listening(_)), "{first:?}");
+}
+
+#[test]
+fn an_instance_that_ends_after_the_pipe_opened_leaves_the_place_to_this_start() {
+    let names = names();
+    let mutex = hold_mutex(&names);
+    let server = raw_server(&names.pipe, 1024);
+    let client = open_raw(&names.pipe);
+    // The instance ends between the open and the hand-over.
+    close(server);
+    close(mutex);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let sent = hand_over(
+        Handle(client),
+        &HSTRING::from(&names.mutex),
+        &encode_request(&[]).unwrap(),
+        deadline,
+    );
+    assert!(matches!(sent, Sent::Gone), "the sender saw the instance go");
+    let first = check(&names, &[]);
+    assert!(matches!(first, Instance::Listening(_)), "{first:?}");
 }
 
 #[test]

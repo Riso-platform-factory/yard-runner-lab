@@ -303,8 +303,8 @@ fn activate_main_window(cx: &mut App) {
     // GPUI's `activate` does nothing on Linux or Windows; there,
     // `activate_window` alone asks for the focus. On Windows it restores a
     // minimized window and asks for the foreground. The later start called
-    // `AllowSetForegroundWindow` for this process, so Windows usually grants
-    // it, but it may still refuse.
+    // `AllowSetForegroundWindow` for this process, and Windows may still
+    // refuse it.
     // TODO(linux-app-activate): on Linux the window manager or compositor
     // decides whether `activate_window` takes the focus: on X11 it sends
     // `_NET_ACTIVE_WINDOW`, and on Wayland it asks for an `xdg_activation_v1`
@@ -783,7 +783,7 @@ mod windows {
                 CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_BROKEN_PIPE,
                 ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_MORE_DATA, ERROR_NO_DATA,
                 ERROR_OPERATION_ABORTED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GetLastError,
-                HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0, WIN32_ERROR,
+                HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT, WIN32_ERROR,
             },
             Security::{
                 Authorization::{
@@ -859,7 +859,7 @@ mod windows {
     }
 
     /// A handle this module opened, closed when dropped.
-    struct Handle(HANDLE);
+    pub(super) struct Handle(pub(super) HANDLE);
 
     impl Drop for Handle {
         fn drop(&mut self) {
@@ -870,10 +870,6 @@ mod windows {
 
     /// The server end of the instance pipe, which the listener's thread owns.
     pub(super) struct Pipe(Handle);
-
-    // SAFETY: a pipe handle may be used from any thread, and only the
-    // listener's thread uses this one.
-    unsafe impl Send for Pipe {}
 
     fn is(error: &::windows::core::Error, code: WIN32_ERROR) -> bool {
         error.code() == code.to_hresult()
@@ -932,19 +928,18 @@ mod windows {
                 return alone(reason);
             }
         };
-        let requests = match receive(pipe) {
+        // The listener's thread holds the mutex while it listens, which is
+        // as long as this process runs unless the pipe fails, so that the
+        // installer's `AppMutex` sees the app.
+        let requests = match receive(pipe, mutex) {
             Ok(requests) => requests,
             Err(error) => {
-                drop(mutex);
                 tracing::debug!("instance mutex released");
                 let reason = format!("the instance listener did not start ({error})");
                 log::error!("{reason}; running without a single instance");
                 return Instance::Alone(reason);
             }
         };
-        // The mutex handle is never closed, so the mutex lives as long as
-        // this process, which the installer's `AppMutex` checks.
-        std::mem::forget(mutex);
         tracing::debug!("listening");
         Instance::Listening(InstanceListener {
             inner: Listener { requests },
@@ -1058,7 +1053,8 @@ mod windows {
     /// What came of [`send`].
     pub(super) enum Sent {
         Done(Instance),
-        /// The mutex is gone: the instance ended before it had a pipe.
+        /// The mutex is gone: the instance ended before it took the
+        /// request.
         Gone,
     }
 
@@ -1075,11 +1071,16 @@ mod windows {
         }
     }
 
-    fn timed_out() -> Instance {
-        refused(format!(
-            "it did not answer within {} seconds",
-            SEND_TIMEOUT.as_secs()
-        ))
+    fn timed_out(busy: Option<&str>) -> Instance {
+        let seconds = SEND_TIMEOUT.as_secs();
+        refused(match busy {
+            Some(error) => {
+                format!(
+                    "it did not answer within {seconds} seconds (the pipe stayed busy: {error})"
+                )
+            }
+            None => format!("it did not answer within {seconds} seconds"),
+        })
     }
 
     /// Hands the request to the instance listening on `pipe` before
@@ -1096,9 +1097,10 @@ mod windows {
             Err(error) => return Sent::Done(refused(error.to_string())),
         };
         let name = HSTRING::from(pipe);
+        let mut busy = None;
         let client = loop {
             if Instant::now() >= deadline {
-                return Sent::Done(timed_out());
+                return Sent::Done(timed_out(busy.as_deref()));
             }
             // SAFETY: the name is a valid string, and the handle is closed
             // when `client` drops. The server may only identify this
@@ -1130,6 +1132,7 @@ mod windows {
                     // SAFETY: the name is a valid string.
                     if let Err(error) = unsafe { WaitNamedPipeW(&name, wait) }.ok() {
                         tracing::debug!("the pipe stayed busy ({error})");
+                        busy = Some(error.to_string());
                     }
                 }
                 Err(error) => {
@@ -1137,33 +1140,44 @@ mod windows {
                 }
             }
         };
-        Sent::Done(hand_over(client, request, deadline))
+        hand_over(client, mutex, request, deadline)
     }
 
     /// Checks that the server of `client` runs as this user, lets it take
-    /// the foreground, and writes the request, all before `deadline`.
-    fn hand_over(client: Handle, request: &[u8], deadline: Instant) -> Instance {
+    /// the foreground, and writes the request, all before `deadline`. If the
+    /// server cannot be looked up, or the write is refused at once, and the
+    /// mutex is gone, the instance ended before it took the request.
+    pub(super) fn hand_over(
+        client: Handle,
+        mutex: &HSTRING,
+        request: &[u8],
+        deadline: Instant,
+    ) -> Sent {
+        let ended = |reason: String| {
+            if mutex_exists(mutex) {
+                Sent::Done(refused(reason))
+            } else {
+                Sent::Gone
+            }
+        };
         let mut server = 0;
         // SAFETY: `client` is an open pipe, and `server` a valid place.
         if let Err(error) = unsafe { GetNamedPipeServerProcessId(client.0, &mut server) } {
-            return refused(format!("the pipe's process is unknown ({error})"));
+            return ended(format!("the pipe's process is unknown ({error})"));
         }
         // URLs may hold secrets: they go only to a process of this user.
         let own = match own_user() {
             Ok(own) => own,
-            Err(error) => return refused(format!("this process's user is unknown ({error})")),
+            Err(error) => {
+                return Sent::Done(refused(format!("this process's user is unknown ({error})")));
+            }
         };
         match server_user(server) {
             Ok(user) if user == own => {}
-            Ok(_) => return refused("the pipe belongs to another user".into()),
+            Ok(_) => return Sent::Done(refused("the pipe belongs to another user".into())),
             // An elevated process, for one, does not let others read its
-            // token.
-            Err(error) => {
-                return refused(format!("the pipe's owner could not be checked ({error})"));
-            }
-        }
-        if Instant::now() >= deadline {
-            return timed_out();
+            // token; a process that ended cannot be looked up.
+            Err(error) => return ended(format!("the pipe's owner could not be checked ({error})")),
         }
         // Windows lets a process take the foreground only from the one that
         // has it, or one that this allowed, and may refuse it even then.
@@ -1172,16 +1186,27 @@ mod windows {
             tracing::debug!("the running instance may not take the foreground ({error})");
         }
         match write(client, request, deadline) {
-            Ok(written) if written == request.len() => {
+            Written::Whole(written) if written == request.len() => {
                 tracing::debug!(bytes = request.len(), "sent to the running instance");
-                Instance::Forwarded
+                Sent::Done(Instance::Forwarded)
             }
-            Ok(written) => refused(format!(
+            Written::Whole(written) => Sent::Done(refused(format!(
                 "only {written} of {} bytes were sent",
                 request.len()
-            )),
-            Err(reason) => refused(reason),
+            ))),
+            Written::NotStarted(reason) => ended(reason),
+            Written::Failed(reason) => Sent::Done(refused(reason)),
         }
+    }
+
+    /// What came of [`write`].
+    enum Written {
+        /// The write ended, with this many bytes.
+        Whole(usize),
+        /// Nothing was handed to the pipe.
+        NotStarted(String),
+        /// The write started, and failed or did not end in time.
+        Failed(String),
     }
 
     /// An overlapped write, with what it uses kept together on the heap, so
@@ -1195,11 +1220,18 @@ mod windows {
     /// Writes `request` to `client`, opened for overlapped writes, as one
     /// message, and gives up at `deadline`, so that an instance that does
     /// not read never holds this start up.
-    fn write(client: Handle, request: &[u8], deadline: Instant) -> Result<usize, String> {
+    fn write(client: Handle, request: &[u8], deadline: Instant) -> Written {
+        let not_in_time = || {
+            format!(
+                "the running instance did not take the request within {} seconds",
+                SEND_TIMEOUT.as_secs()
+            )
+        };
         // SAFETY: a manual-reset event without a name, closed when dropped.
-        let event = unsafe { CreateEventW(None, true, false, None) }
-            .map(Handle)
-            .map_err(|error| format!("no event to wait on ({error})"))?;
+        let event = match unsafe { CreateEventW(None, true, false, None) } {
+            Ok(event) => Handle(event),
+            Err(error) => return Written::NotStarted(format!("no event to wait on ({error})")),
+        };
         let mut write = Box::new(Write {
             overlapped: OVERLAPPED {
                 hEvent: event.0,
@@ -1212,6 +1244,9 @@ mod windows {
             let remaining = deadline.saturating_duration_since(Instant::now());
             remaining.as_millis().min(u32::MAX as u128) as u32
         };
+        if Instant::now() >= deadline {
+            return Written::NotStarted(not_in_time());
+        }
         // SAFETY: `write` holds the buffer and the `OVERLAPPED` until the
         // write ends, or for ever if it may not have ended.
         let started = unsafe {
@@ -1226,7 +1261,14 @@ mod windows {
             Ok(()) => {}
             Err(error) if is(&error, ERROR_IO_PENDING) => {
                 // SAFETY: the event is a valid handle.
-                if unsafe { WaitForSingleObject(write.event.0, wait(deadline)) } != WAIT_OBJECT_0 {
+                let waited = unsafe { WaitForSingleObject(write.event.0, wait(deadline)) };
+                if waited != WAIT_OBJECT_0 {
+                    let reason = if waited == WAIT_TIMEOUT {
+                        not_in_time()
+                    } else {
+                        let error = ::windows::core::Error::from_thread();
+                        format!("the write could not be waited for ({error})")
+                    };
                     // SAFETY: cancels only this write.
                     let _ = unsafe { CancelIoEx(client.0, Some(&raw const write.overlapped)) };
                     // The deadline has passed, so the cancel is not waited
@@ -1238,30 +1280,22 @@ mod windows {
                     if unsafe { WaitForSingleObject(write.event.0, 0) } != WAIT_OBJECT_0 {
                         Box::leak(write);
                         std::mem::forget(client);
-                        return Err(format!(
-                            "the running instance did not take the request within {} seconds",
-                            SEND_TIMEOUT.as_secs()
-                        ));
+                        return Written::Failed(reason);
                     }
+                    // A write that ended during the cancel was delivered,
+                    // and counts.
                 }
             }
-            Err(error) => return Err(error.to_string()),
+            // Refused at once: nothing reached the pipe.
+            Err(error) => return Written::NotStarted(error.to_string()),
         }
         let mut written = 0;
         // SAFETY: the write has ended, and `written` is a valid place.
-        unsafe { GetOverlappedResult(client.0, &write.overlapped, &mut written, false) }.map_err(
-            |error| {
-                if is(&error, ERROR_OPERATION_ABORTED) {
-                    format!(
-                        "the running instance did not take the request within {} seconds",
-                        SEND_TIMEOUT.as_secs()
-                    )
-                } else {
-                    error.to_string()
-                }
-            },
-        )?;
-        Ok(written as usize)
+        match unsafe { GetOverlappedResult(client.0, &write.overlapped, &mut written, false) } {
+            Ok(()) => Written::Whole(written as usize),
+            Err(error) if is(&error, ERROR_OPERATION_ABORTED) => Written::Failed(not_in_time()),
+            Err(error) => Written::Failed(error.to_string()),
+        }
     }
 
     /// The user the process `id` runs as.
@@ -1280,42 +1314,67 @@ mod windows {
     /// send its request.
     const READ_TIMEOUT: Duration = SEND_TIMEOUT;
 
+    /// The listener's thread owns what it uses: the pipe, its event, and
+    /// the instance mutex.
+    struct Listening {
+        pipe: Pipe,
+        event: Handle,
+        /// Held only to be closed when the listener ends.
+        _mutex: Handle,
+    }
+
+    // SAFETY: these handles may be used from any thread, and only the
+    // listener's thread uses them.
+    unsafe impl Send for Listening {}
+
     /// Receives each message on the pipe on a thread of its own, and sends
-    /// it on. A message larger than a request may be, or one that does not
-    /// come in time, is refused there, in the group `instance-request`.
-    pub(super) fn receive(pipe: Pipe) -> std::io::Result<UnboundedReceiver<Vec<u8>>> {
+    /// it on, each in the group `instance-request`. A message larger than a
+    /// request may be, or one that does not come in time, is refused there.
+    /// The thread holds `mutex`, the instance's, for as long as it listens:
+    /// if the pipe fails for good, it closes the mutex, so that later starts
+    /// run on their own instead of waiting for it.
+    pub(super) fn receive(
+        pipe: Pipe,
+        mutex: Handle,
+    ) -> std::io::Result<UnboundedReceiver<Vec<u8>>> {
+        // SAFETY: a manual-reset event without a name, closed when dropped.
+        let event = unsafe { CreateEventW(None, true, false, None) }
+            .map(Handle)
+            .map_err(std::io::Error::other)?;
+        let listening = Listening {
+            pipe,
+            event,
+            _mutex: mutex,
+        };
         let (tx, rx) = futures::channel::mpsc::unbounded();
         std::thread::Builder::new()
             .name("instance-listener".into())
             .spawn(move || {
-                let pipe = pipe;
-                let handle = (pipe.0).0;
+                let listening = listening;
+                let handle = (listening.pipe.0).0;
+                let event = &listening.event;
                 let stopped = |error: &dyn std::fmt::Display| {
                     log::warn!(
-                        "the instance pipe stopped receiving ({error}); later starts are refused"
+                        "the instance pipe stopped receiving ({error}); later starts run on their own"
                     );
-                };
-                // SAFETY: a manual-reset event without a name, closed when
-                // dropped.
-                let event = match unsafe { CreateEventW(None, true, false, None) } {
-                    Ok(event) => Handle(event),
-                    Err(error) => return stopped(&error),
                 };
                 let mut buffer = vec![0; MAX_REQUEST_LEN];
                 loop {
-                    if let Err(error) = connect(handle, &event) {
+                    if let Err(error) = connect(handle, event) {
                         // Whatever state the pipe is in, disconnecting
                         // makes it ready to listen again.
                         // SAFETY: `handle` is the server end of the pipe,
                         // which only this thread uses.
                         if let Err(error) = unsafe { DisconnectNamedPipe(handle) } {
+                            // Dropping `listening` closes the mutex.
                             return stopped(&error);
                         }
                         log::warn!("a start could not connect to the instance pipe ({error})");
                         std::thread::sleep(RETRY);
                         continue;
                     }
-                    let request = read_request(handle, &event, &mut buffer);
+                    let _group = tracing::info_span!("instance-request").entered();
+                    let request = read_request(handle, event, &mut buffer);
                     // SAFETY: as above.
                     if let Err(error) = unsafe { DisconnectNamedPipe(handle) } {
                         return stopped(&error);
@@ -1328,7 +1387,6 @@ mod windows {
                         }
                         Ok(None) => {}
                         Err(reason) => {
-                            let _group = tracing::info_span!("instance-request").entered();
                             log::warn!("a request from another start was refused: {reason}");
                         }
                     }
@@ -1381,6 +1439,11 @@ mod windows {
                 let wait = READ_TIMEOUT.as_millis() as u32;
                 // SAFETY: the event is a valid handle.
                 if unsafe { WaitForSingleObject(event.0, wait) } != WAIT_OBJECT_0 {
+                    // The end of the cancel is waited for without a limit,
+                    // since the system may use `buffer` and `overlapped`
+                    // until then. This is the listener's own thread: it only
+                    // holds up later starts, which give up after their own
+                    // two seconds.
                     // SAFETY: cancels only this read, whose end is waited
                     // for below.
                     let _ = unsafe { CancelIoEx(pipe, Some(&raw const overlapped)) };
