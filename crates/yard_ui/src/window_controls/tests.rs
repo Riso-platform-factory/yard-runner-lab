@@ -161,6 +161,76 @@ fn macos_gets_no_drawn_controls() {
 }
 
 #[test]
+fn windows_draws_its_caption_buttons_unless_fullscreen() {
+    assert!(draws_windows_buttons(Platform::Windows, false));
+    assert!(!draws_windows_buttons(Platform::Windows, true));
+}
+
+#[test]
+fn macos_and_linux_draw_no_windows_caption_buttons() {
+    for platform in [Platform::Mac, Platform::Linux] {
+        for fullscreen in [false, true] {
+            assert!(
+                !draws_windows_buttons(platform, fullscreen),
+                "{platform:?} fullscreen={fullscreen}"
+            );
+        }
+    }
+}
+
+#[test]
+fn windows_draws_none_of_the_linux_buttons() {
+    for decorations in [Decorations::Server, client()] {
+        assert_eq!(
+            drawn_sides(
+                Platform::Windows,
+                decorations,
+                Some(default_button_layout())
+            ),
+            DrawnSides::default(),
+            "{decorations:?}"
+        );
+    }
+}
+
+#[test]
+fn the_windows_buttons_are_minimize_maximize_and_close_in_order() {
+    assert_eq!(
+        windows_buttons(false),
+        [Kind::Minimize, Kind::Maximize, Kind::Close]
+    );
+    assert_eq!(
+        windows_buttons(true),
+        [Kind::Minimize, Kind::Restore, Kind::Close]
+    );
+}
+
+#[test]
+fn each_windows_button_is_its_control_area_with_its_glyph() {
+    let cases = [
+        (
+            Kind::Minimize,
+            WindowControlArea::Min,
+            "\u{e921}",
+            "minimize",
+        ),
+        (
+            Kind::Maximize,
+            WindowControlArea::Max,
+            "\u{e922}",
+            "maximize",
+        ),
+        (Kind::Restore, WindowControlArea::Max, "\u{e923}", "restore"),
+        (Kind::Close, WindowControlArea::Close, "\u{e8bb}", "close"),
+    ];
+    for (kind, area, glyph, action) in cases {
+        assert_eq!(kind.control_area(), area, "{kind:?}");
+        assert_eq!(kind.glyph(), glyph, "{kind:?}");
+        assert_eq!(kind.action().name(), action, "{kind:?}");
+    }
+}
+
+#[test]
 fn this_mac_build_is_the_mac_platform() {
     if cfg!(target_os = "macos") {
         assert_eq!(Platform::CURRENT, Platform::Mac);
@@ -222,6 +292,9 @@ impl gpui::Render for Buttons {
                     .left,
             ))
             .child(WindowButtons::new("none", [None; 3]))
+            .child(WindowsWindowButtons::new("windows"))
+            .child(WindowsWindowButtons::new("windows-maximized").maximized(true))
+            .child(WindowsWindowButtons::new("windows-hovered").hovered(Close))
             .child(
                 WindowButtons::new("closed-only", right).supported(WindowControls {
                     fullscreen: false,

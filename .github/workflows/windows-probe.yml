@@ -38,6 +38,27 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: .github/scripts/windows-app.ps1
+      - name: Window controls with real mouse input (part 5b)
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: .github/scripts/windows-controls.ps1
+      - name: Gallery screenshot of the window controls
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo build -p yard 2>&1 | Select-Object -Last 2
+          $env:UI_GALLERY = "window-controls"
+          $env:YARD_HOME = "$env:RUNNER_TEMP\gallery-home"
+          $p = Start-Process -FilePath target\debug\yard.exe -ArgumentList "dev" -PassThru -RedirectStandardOutput gallery-app.log -RedirectStandardError gallery-app-err.log
+          Start-Sleep 20
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$PWD\gallery.png")
+          Get-Process yard -ErrorAction SilentlyContinue | Stop-Process
       - name: Headless screenshot
         if: steps.build.outcome == 'success'
         continue-on-error: true

@@ -2,7 +2,10 @@
 //! ddb90e5e89d346f21847281727e1644b8bb2cc37, licensed GPL-3.0-or-later.
 //! Copyright Zed Industries, Inc.
 
-use crate::{DrawnSides, Platform, WindowButtons, WindowControlAction, drawn_sides, h_flex};
+use crate::{
+    DrawnSides, Platform, WindowButtons, WindowControlAction, WindowsWindowButtons, drawn_sides,
+    draws_windows_buttons, h_flex,
+};
 use gpui::{
     AnyElement, App, Decorations, ElementId, InteractiveElement, IntoElement, MouseButton,
     ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, TitlebarOptions,
@@ -69,6 +72,9 @@ impl RenderOnce for TitleBar {
         } else {
             drawn_sides(Platform::CURRENT, decorations, cx.button_layout())
         };
+        // On Windows the system moves, maximizes, and opens the menu from the
+        // bar itself, through its control area.
+        let windows_buttons = draws_windows_buttons(Platform::CURRENT, fullscreen);
         // On Linux the window manager moves the window once the pointer moves
         // with the button down, so that a click and a double-click still
         // reach the bar.
@@ -198,7 +204,7 @@ impl RenderOnce for TitleBar {
                 h_flex().h_full().flex_1().justify_end().child(
                     h_flex()
                         .h_full()
-                        .when(right.is_none(), |bar| bar.pr_2())
+                        .when(right.is_none() && !windows_buttons, |bar| bar.pr_2())
                         .when(!self.right.is_empty(), |bar| {
                             bar.child(
                                 h_flex()
@@ -214,6 +220,9 @@ impl RenderOnce for TitleBar {
             )
             .when_some(right, |bar, buttons| {
                 bar.child(WindowButtons::new("right-window-controls", buttons))
+            })
+            .when(windows_buttons, |bar| {
+                bar.child(WindowsWindowButtons::new("windows-window-controls"))
             })
     }
 }

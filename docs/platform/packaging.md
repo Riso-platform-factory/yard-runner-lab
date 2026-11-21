@@ -132,7 +132,11 @@ The app, the zip, and the disk image are all made inside a staging folder in `--
   - `AppId` is derived from the identifier.
   - `AppMutex` names the same mutex the app creates. Both take it from one function, unlike Zed, whose installer names a different one.
   - Uninstall removes all of the above.
-- **The executable.** The `.exe` carries the icon and its version through a resource file made by `build.rs` (Zed's `windows_resources`). In a production build it runs without a console (`windows_subsystem = "windows"`).
+- **The executable.** `build.rs` makes a resource script from the config, written from Microsoft's VERSIONINFO reference, and compiles it into the `.exe` with `embed-resource`:
+  - **Resource 1, the icon.** An ICO at 16, 24, 32, 48, 64, and 256 px, made from the config's PNG. GPUI loads it for the window and the taskbar.
+  - **VERSIONINFO.** ProductName and FileDescription come from the name. FileVersion and ProductVersion come from the version. The numeric version is `major.minor.patch.0`, read before any `-` or `+`. A number over 65535 fails the build, naming the config. There is no CompanyName, since the config has none.
+  - **Built on Windows only.** The resource compiles only on a Windows host. A Windows build made on another system has neither, and the build warns.
+  - **No console.** A release build runs without a console (`windows_subsystem = "windows"`). A debug build keeps one, for the lifecycle trace.
 - **Not copied from Zed:** file associations, context menus, PATH, a WSL wrapper.
 - Signing is described in "Signing and the disk image" above, and comes with part 5 of this slice.
 
@@ -151,7 +155,7 @@ These change engines that are in production today. Each change goes to the user 
 - **Window options.**
   - `app_id` is the identifier, so Wayland and X11 match the window to its `.desktop` file.
   - The X11 icon comes from the config.
-  - On Windows, `cx.set_app_identity` uses the identifier, as the shortcut does.
+  - On Windows, `cx.set_app_identity(identifier, name)` is called first thing in the app's run, logged as `app identity set`. The shortcut uses the same identifier.
 - **One instance (`yard_shell`).** On Linux, a start first looks for the running instance through a socket at `<data>/instance/instance.sock`:
   - It holds a lock (`instance.lock` in the same folder) while it looks, so two starts at the same moment end with exactly one instance.
   - The folder is private to the user (0700) and the socket is 0600. A start sends only to a socket owned by its own user, and removes only a stale socket of its own user, never a file or a link. The lock is never followed through a link and never waits on a FIFO.
@@ -166,7 +170,7 @@ These change engines that are in production today. Each change goes to the user 
   - On Wayland, a compositor gives focus only with a recent input event; KWin and Mutter otherwise mark the window as demanding attention.
 - **Directories (`yard_paths`), as Zed's `paths`:**
   - **Linux:** `$XDG_CONFIG_HOME/<name>` (else `~/.config/<name>`) and `$XDG_DATA_HOME/<name>` (else `~/.local/share/<name>`), with logs in `<data>/logs`, as Zed's. State and cache folders come when something uses them.
-  - **Windows:** `%APPDATA%\<Name>` for settings, and `%LOCALAPPDATA%\<Name>` for data, logs, and cache.
+  - **Windows:** `%APPDATA%\<Name>` for settings, and `%LOCALAPPDATA%\<Name>` for data, with logs in `<data>\logs`, as Zed's. `XDG_*` variables are ignored there.
 - **Updates.** On Linux and Windows, `yard_update` compiles and does nothing, with a `debug` line, until the `release-updates` slice. The macOS-only code (`renamex_np`, `ditto`, `codesign`) is put behind `cfg(target_os = "macos")`.
 
 ## Configs under test

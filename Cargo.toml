@@ -39,6 +39,7 @@ log = "0.4.35"
 tracing = "0.1.44"
 tracing-log = { version = "0.2", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry", "env-filter"] }
+windows = "0.62"
 schemars = "1.2.3"
 semver = "1"
 serde = { version = "1.0.229", features = ["derive"] }

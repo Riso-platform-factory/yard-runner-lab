@@ -24,6 +24,10 @@ log.workspace = true
 tracing.workspace = true
 unicode-segmentation.workspace = true
 
+# `RtlGetVersion`, for the font of the caption buttons.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Wdk_System_SystemServices", "Win32_Foundation", "Win32_System_SystemInformation"] }
+
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 

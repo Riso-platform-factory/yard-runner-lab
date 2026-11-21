@@ -1,12 +1,18 @@
 // Alone in this binary: captures tracing output, which would race with any
 // other test reaching the same log lines.
-use gpui::{ParentElement, ResizeEdge, Styled, TestAppContext, div, point, px};
+use gpui::{
+    Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement, PlatformInput, ResizeEdge,
+    Styled, TestAppContext, point, px,
+};
 use std::{
     collections::BTreeMap,
     panic::AssertUnwindSafe,
     sync::{Arc, Mutex},
 };
-use yard_ui::{WindowButtons, WindowControlAction, client_decorations, default_button_layout};
+use yard_ui::{
+    WindowButtons, WindowControlAction, WindowsWindowButtons, client_decorations,
+    default_button_layout, h_flex, v_flex,
+};
 
 struct Page;
 
@@ -17,9 +23,15 @@ impl gpui::Render for Page {
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         client_decorations(
-            div()
+            v_flex()
                 .size_full()
-                .child(WindowButtons::new("buttons", default_button_layout().right)),
+                .child(WindowButtons::new("buttons", default_button_layout().right))
+                .child(
+                    h_flex()
+                        .w(px(200.))
+                        .justify_end()
+                        .child(WindowsWindowButtons::new("windows-buttons")),
+                ),
             window,
             cx,
         )
@@ -138,6 +150,11 @@ fn a_draw_traces_and_each_action_logs_in_its_group(cx: &mut TestAppContext) {
         "{lines:?}"
     );
     assert!(
+        lines.iter().any(|line| line
+            == "none: TRACE yard_ui::window_controls message=rendering windows caption buttons maximized=false"),
+        "{lines:?}"
+    );
+    assert!(
         lines.iter().any(
             |line| line.starts_with("none: TRACE yard_ui::client_decorations")
                 && line.contains("rendering client decorations")
@@ -193,6 +210,64 @@ fn a_draw_traces_and_each_action_logs_in_its_group(cx: &mut TestAppContext) {
         }
     }
     let _ = std::panic::take_hook();
+
+    // An action that Windows does itself logs only, in the same group.
+    tracing::subscriber::with_default(trace.clone(), || {
+        WindowControlAction::Maximize.leave_to_system();
+    });
+    let (spans, lines) = take_lines(&trace);
+    assert_eq!(
+        spans,
+        vec!["INFO window-control action=maximize".to_string()]
+    );
+    assert_eq!(
+        lines,
+        vec![
+            "INFO window-control action=maximize: DEBUG yard_ui::window_controls message=left to the system"
+                .to_string()
+        ]
+    );
+
+    // The Windows buttons end the 200 px row below the Linux buttons: 36 px
+    // each, 32 px high, from y = 20. A click logs its action, and no element
+    // stops the press or the release: GPUI on Windows hands the system the
+    // caption button's action only then.
+    for (x, action) in [(110., "minimize"), (146., "maximize"), (182., "close")] {
+        let position = point(px(x), px(36.));
+        let propagated = tracing::subscriber::with_default(trace.clone(), || {
+            cx.update(|window, cx| {
+                let down = window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position,
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    }),
+                    cx,
+                );
+                let up = window.dispatch_event(
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Left,
+                        position,
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                    }),
+                    cx,
+                );
+                (down.propagate, up.propagate)
+            })
+        });
+        assert_eq!(propagated, (true, true), "{action}");
+        let (spans, lines) = take_lines(&trace);
+        let group = format!("INFO window-control action={action}");
+        assert!(spans.contains(&group), "{action}: {spans:?}");
+        assert!(
+            lines.iter().any(|line| line
+                == &format!("{group}: DEBUG yard_ui::window_controls message=left to the system")),
+            "{action}: {lines:?}"
+        );
+    }
 
     // The buttons sit at the top left: 12 px of padding, then 20 px buttons
     // 12 px apart, so close is centred at (86, 10).

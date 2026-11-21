@@ -99,7 +99,14 @@
   <li>Chỉ một phiên bản; URL tới app đang chạy. <span style="color:var(--ok)">Đã duyệt.</span></li>
   <li><code>cargo xtask bundle linux</code>: <code>.tar.gz</code>, <code>.desktop</code>, icon, <code>install.sh</code>. <span style="color:var(--ok)">Đã duyệt.</span></li>
   </ol></li>
-<li>App chạy trên Windows, rồi <code>bundle windows</code>, kèm ký code Windows.</li>
+<li>App chạy trên Windows, rồi <code>bundle windows</code>, kèm ký code Windows. <span style="color:var(--warn)">Đang làm</span>, chia năm lần duyệt:
+  <ol type="a">
+  <li>Build, qua test và chạy được trên Windows: icon và phiên bản trong <code>.exe</code>, thư mục <code>%APPDATA%</code>/<code>%LOCALAPPDATA%</code>, bản release không có console. <span style="color:var(--ok)">Đã duyệt.</span></li>
+  <li>Nút cửa sổ tự vẽ, như Zed.</li>
+  <li>Chỉ một phiên bản (mutex và named pipe); URL tới app đang chạy.</li>
+  <li><code>cargo xtask bundle windows</code>: bộ cài Inno Setup và <code>.zip</code>.</li>
+  <li>Ký Authenticode.</li>
+  </ol></li>
 <li>Kiểm trên runner trong repo nháp.</li>
 </ol>
 <p class="muted">Các phần 1, 4, 5 sửa engine đang ở production (<code>build.rs</code>, <code>yard_ui</code>, <code>yard_shell</code>, <code>yard_paths</code>, <code>yard_update</code>). Tôi sẽ đưa anh xem từng thay đổi trước khi đóng dấu lại. Chưa làm trong lát này: phát hành, bản ARM cho Linux và Windows, Flatpak, .deb, MSI.</p>

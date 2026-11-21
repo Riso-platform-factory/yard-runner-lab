@@ -14,7 +14,7 @@
   },
   "yard/startup": {
     "files": {
-      "app/yard/src/startup.rs": "127f56278f5d0aa4"
+      "app/yard/src/startup.rs": "730daae2d85e1ea7"
     },
     "promoted": "2026-11-21"
   },
@@ -73,9 +73,9 @@
   },
   "yard_paths/directories": {
     "files": {
-      "crates/yard_paths/src/directories.rs": "7fe9e24937e175e6"
+      "crates/yard_paths/src/directories.rs": "4c253d15baadd4d1"
     },
-    "promoted": "2026-11-20"
+    "promoted": "2026-11-21"
   },
   "yard_paths/file_check": {
     "files": {
@@ -145,9 +145,9 @@
   },
   "yard_paths/write_atomic": {
     "files": {
-      "crates/yard_paths/src/write_atomic.rs": "c1071920f441312d"
+      "crates/yard_paths/src/write_atomic.rs": "a375b358f2293f9c"
     },
-    "promoted": "2026-11-12"
+    "promoted": "2026-11-21"
   },
   "yard_product/product": {
     "files": {
