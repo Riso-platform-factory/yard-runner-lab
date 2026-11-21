@@ -101,60 +101,22 @@ struct Tools {
     certutil: PathBuf,
 }
 
-/// The oldest Inno Setup that reads the script: `x64compatible` and a UTF-8
-/// script without a byte order mark came with 6.3.
-const OLDEST_INNO_SETUP: (u32, u32) = (6, 3);
-
-/// Finds the tools and checks Inno Setup's version, from the banner that
-/// `ISCC.exe /?` prints (`Inno Setup 6.3.3 Command-Line Compiler`).
-fn tools(host: &WindowsHost, runner: &mut dyn Runner) -> Result<Tools, Failure> {
+/// Finds the tools: Inno Setup's compiler, and Windows' own `tar.exe` and
+/// `certutil.exe`. Inno Setup's version is checked by the script itself,
+/// when it compiles (see [`inno_script`]).
+fn tools(host: &WindowsHost) -> Result<Tools, Failure> {
     let refuse = |reason: String| Failure::new("tools", reason);
     let iscc = host.iscc().ok_or_else(|| {
         refuse(
             "Inno Setup's compiler was not found: ISCC.exe is neither on PATH nor in %ProgramFiles(x86)%\\Inno Setup 6".into(),
         )
     })?;
-    // `/?` prints the banner and the options; its exit code says nothing of
-    // the version.
-    let (_, banner) = runner
-        .report(Command::new(&iscc).arg("/?"))
-        .map_err(refuse)?;
-    let banner = String::from_utf8_lossy(&banner);
-    let version = inno_setup_version(&banner).ok_or_else(|| {
-        refuse(format!(
-            "could not read Inno Setup's version from {} /?",
-            iscc.display()
-        ))
-    })?;
-    tracing::debug!(iscc = %iscc.display(), version = %version.0, "inno setup");
-    if version.1 < OLDEST_INNO_SETUP {
-        return Err(refuse(format!(
-            "Inno Setup {} at {} is too old: bundle windows needs {}.{} or later",
-            version.0,
-            iscc.display(),
-            OLDEST_INNO_SETUP.0,
-            OLDEST_INNO_SETUP.1
-        )));
-    }
+    tracing::debug!(iscc = %iscc.display(), "inno setup");
     Ok(Tools {
         iscc,
         tar: host.system_tool("tar.exe").map_err(refuse)?,
         certutil: host.system_tool("certutil.exe").map_err(refuse)?,
     })
-}
-
-/// The version after `Inno Setup ` in the banner, as written and as its
-/// major and minor numbers.
-fn inno_setup_version(banner: &str) -> Option<(String, (u32, u32))> {
-    let rest = &banner[banner.find("Inno Setup ")? + "Inno Setup ".len()..];
-    let written: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    let mut numbers = written.split('.').map(|part| part.parse::<u32>().ok());
-    let major = numbers.next()??;
-    let minor = numbers.next().flatten().unwrap_or(0);
-    Some((written.clone(), (major, minor)))
 }
 
 /// What `bundle_windows` made, each with its SHA-256 in hex.
@@ -224,7 +186,7 @@ fn bundle(
     let product = read_config(&config, options.dev)?;
 
     tracing::debug!("tools");
-    let tools = tools(host, runner)?;
+    let tools = tools(host)?;
 
     if product.windows.signing.is_some() {
         // TODO(packaging-5e-windows-signing): sign the `.exe` and the
@@ -363,9 +325,11 @@ fn in_temp(
 
     step("installer", interrupt)?;
     let installer = |reason| Failure::new("installer", reason);
+    // `/Q` prints only errors, on stderr, where the user reads them, such as
+    // the script's refusal of an Inno Setup older than 6.3.
     runner
         .run(Command::new(&tools.iscc).arg("/Q").arg(&script))
-        .map_err(installer)?;
+        .map_err(|reason| installer(format!("{reason}; Inno Setup printed why above")))?;
     let setup_name = format!("{}.exe", setup_base_name(product));
     let setup = temp.join(&setup_name);
     if !setup.is_file() {
@@ -506,6 +470,13 @@ pub fn inno_script(product: &BuildConfig, dev: bool, arch: &str) -> String {
     let arguments = if dev { "dev " } else { "" };
     let mut text = format!(
         "; Made by `cargo xtask bundle windows` from {identifier}'s product config.\n\
+         \n\
+         ; `x64compatible` and a UTF-8 script without a byte order mark need Inno\n\
+         ; Setup 6.3. Its preprocessor's VER is the compiler's own version, which\n\
+         ; neither ISCC's banner nor a package manager's shim gives.\n\
+         #if VER < EncodeVer(6,3,0)\n\
+         #pragma error \"bundle windows needs Inno Setup 6.3 or later, and this is Inno Setup \" + DecodeVer(VER)\n\
+         #endif\n\
          \n\
          [Setup]\n\
          ; The identifier: stable across versions, unique as a reverse-domain name,\n\

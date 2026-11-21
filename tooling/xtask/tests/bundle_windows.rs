@@ -156,6 +156,9 @@ fn expected_lines(
         ("", "", "")
     };
     let mut lines = vec![
+        "#if VER < EncodeVer(6,3,0)".to_owned(),
+        "#pragma error \"bundle windows needs Inno Setup 6.3 or later, and this is Inno Setup \" + DecodeVer(VER)".to_owned(),
+        "#endif".to_owned(),
         "[Setup]".to_owned(),
         format!("AppId={identifier}"),
         format!("AppName={name}"),
@@ -321,32 +324,19 @@ fn each_config_lays_out_its_installer_and_zip() {
 
         assert_eq!(
             runner.programs(),
-            [
-                "ISCC", "cargo", "cargo", "ISCC", "certutil", "tar", "certutil"
-            ],
+            ["cargo", "cargo", "ISCC", "certutil", "tar", "certutil"],
             "{folder}: the commands in order"
         );
-        assert_eq!(
-            runner.commands[0].args,
-            ["/?"],
-            "{folder}: the version first"
-        );
-        for (index, name) in [
-            (0, "ISCC"),
-            (3, "ISCC"),
-            (4, "certutil"),
-            (5, "tar"),
-            (6, "certutil"),
-        ] {
+        for (index, name) in [(2, "ISCC"), (3, "certutil"), (4, "tar"), (5, "certutil")] {
             assert_eq!(
                 runner.commands[index].path,
                 tool(temp.path(), name),
                 "{folder}: {name} by its full path"
             );
         }
-        let stages = &runner.commands[1];
+        let stages = &runner.commands[0];
         assert_eq!(stages.args, ["test", "-p", "yard", "--test", "stages"]);
-        let build = &runner.commands[2];
+        let build = &runner.commands[1];
         assert_eq!(
             build.args,
             [
@@ -374,7 +364,7 @@ fn each_config_lays_out_its_installer_and_zip() {
             "{folder}: no secret reaches cargo"
         );
 
-        let iscc = &runner.commands[3];
+        let iscc = &runner.commands[2];
         let staging = staged.script.parent().unwrap();
         assert_eq!(
             iscc.args,
@@ -387,14 +377,14 @@ fn each_config_lays_out_its_installer_and_zip() {
             "{folder}: staged inside out"
         );
         assert_eq!(
-            runner.commands[4].args,
+            runner.commands[3].args,
             [
                 "-hashfile".to_owned(),
                 staging.join(&setup).display().to_string(),
                 "SHA256".to_owned()
             ]
         );
-        let tar = &runner.commands[5];
+        let tar = &runner.commands[4];
         assert_eq!(
             tar.args,
             [
@@ -434,7 +424,7 @@ fn a_dev_bundle_runs_dev_from_its_shortcut_and_its_url_command() {
         "{iss}"
     );
     assert!(
-        !runner.commands[2]
+        !runner.commands[1]
             .args
             .iter()
             .any(|arg| arg == "--no-default-features"),
@@ -520,9 +510,7 @@ fn inno_setup_is_found_in_program_files_when_not_on_path() {
         &mut runner,
     )
     .unwrap();
-    for index in [0, 3] {
-        assert_eq!(runner.commands[index].path, inno.join("ISCC.exe"));
-    }
+    assert_eq!(runner.commands[2].path, inno.join("ISCC.exe"));
 }
 
 #[test]
@@ -544,43 +532,58 @@ fn inno_setup_on_path_comes_first() {
         &mut runner,
     )
     .unwrap();
-    assert_eq!(runner.commands[0].path, tool(temp.path(), "ISCC"));
+    assert_eq!(runner.commands[2].path, tool(temp.path(), "ISCC"));
 }
 
 #[test]
-fn an_old_or_unknown_inno_setup_is_refused_before_building() {
-    for (banner, reason) in [
-        ("Inno Setup 6.2.2 Command-Line Compiler\r\n", Some("6.2.2")),
-        ("Inno Setup 5.6.1 Command-Line Compiler\r\n", Some("5.6.1")),
-        ("Something else\r\n", None),
-    ] {
-        let temp = tempdir();
-        let mut runner = FakeRunner::new(temp.path());
-        runner.iscc_banner = banner;
-        let failure = bundle(
-            &options(&under_test("plain"), &temp.path().join("out")),
-            temp.path(),
-            &mut runner,
-        )
-        .unwrap_err();
-        let iscc = tool(temp.path(), "ISCC");
-        assert_eq!(failure.step, "tools");
-        assert_eq!(
-            failure.reason,
-            match reason {
-                Some(version) => format!(
-                    "Inno Setup {version} at {} is too old: bundle windows needs 6.3 or later",
-                    iscc.display()
-                ),
-                None => format!(
-                    "could not read Inno Setup's version from {} /?",
-                    iscc.display()
-                ),
-            }
-        );
-        assert!(failure.is_refusal());
-        assert_eq!(runner.programs(), ["ISCC"], "nothing was built");
-    }
+fn the_script_refuses_an_inno_setup_older_than_6_3() {
+    let temp = tempdir();
+    let mut runner = FakeRunner::new(temp.path());
+    let staged = watch_staging(&mut runner, "Lab");
+    bundle(
+        &options(&under_test("plain"), &temp.path().join("out")),
+        temp.path(),
+        &mut runner,
+    )
+    .unwrap();
+    let iss = staged.lock().unwrap().iss.clone();
+    let check: Vec<&str> = iss
+        .lines()
+        .skip_while(|line| !line.starts_with('#'))
+        .take(3)
+        .collect();
+    assert_eq!(
+        check,
+        [
+            "#if VER < EncodeVer(6,3,0)",
+            "#pragma error \"bundle windows needs Inno Setup 6.3 or later, and this is Inno Setup \" + DecodeVer(VER)",
+            "#endif",
+        ],
+        "checked by the preprocessor before any section:\n{iss}"
+    );
+    assert!(
+        iss.find("#endif").unwrap() < iss.find("[Setup]").unwrap(),
+        "{iss}"
+    );
+}
+
+#[test]
+fn a_failed_inno_setup_points_to_its_message() {
+    let temp = tempdir();
+    let mut runner = FakeRunner::new(temp.path());
+    runner.fail = Some("ISCC");
+    let failure = bundle(
+        &options(&under_test("plain"), &temp.path().join("out")),
+        temp.path(),
+        &mut runner,
+    )
+    .unwrap_err();
+    assert_eq!(failure.step, "installer");
+    assert_eq!(
+        failure.reason,
+        "ISCC exited with exit status: 1; Inno Setup printed why above"
+    );
+    assert!(!failure.is_refusal());
 }
 
 #[test]
@@ -614,7 +617,7 @@ fn windows_own_tools_are_required() {
                 )
             }
         );
-        assert_eq!(runner.programs(), ["ISCC"], "nothing was built");
+        assert!(runner.commands.is_empty(), "nothing was built");
     }
 }
 

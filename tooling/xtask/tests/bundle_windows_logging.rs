@@ -173,7 +173,7 @@ fn bundling_runs_inside_the_bundle_windows_group() {
         )
         .unwrap_err();
         let mut failing = FakeRunner::new(temp.path());
-        failing.fail = Some("ISCC /Q");
+        failing.fail = Some("ISCC");
         bundle_windows(&options, &windows, &interrupt, &mut failing).unwrap_err();
         bundle_windows(
             &dev,
@@ -304,7 +304,7 @@ fn bundling_runs_inside_the_bundle_windows_group() {
     let failure = lines_in(&groups[2].0);
     assert!(
         failure.iter().any(|(level, message)| *level == Level::ERROR
-            && message == "failed at installer: ISCC exited with exit status: 1"),
+            && message == "failed at installer: ISCC exited with exit status: 1; Inno Setup printed why above"),
         "a failed step is an ERROR with the reason: {failure:?}"
     );
 

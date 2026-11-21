@@ -91,9 +91,6 @@ pub type Hook = Box<dyn FnMut(&Path)>;
 /// What runs as a command starts.
 pub type CommandHook = Box<dyn FnMut(&Recorded)>;
 
-/// The banner the fake `ISCC.exe /?` prints, as Inno Setup 6.4.3 does.
-pub const ISCC_BANNER: &str = "Inno Setup 6.4.3 Command-Line Compiler\r\nCopyright (C) 1997-2025 Jordan Russell. All rights reserved.\r\n";
-
 /// The search list the fake `security list-keychains` prints.
 pub const LOGIN_KEYCHAIN: &str = "/Users/test/Library/Keychains/login.keychain-db";
 
@@ -105,7 +102,7 @@ pub const LOGIN_KEYCHAIN: &str = "/Users/test/Library/Keychains/login.keychain-d
 /// `create-keychain` writes the keychain's file as `<path>-db`,
 /// `delete-keychain` takes the keychain out of `search_list`, and
 /// `notarytool submit` reports `notarization` and fails unless it is
-/// `Accepted`, and `ISCC.exe /?` prints `iscc_banner`.
+/// `Accepted`.
 /// `on_command` sees every command as it starts. `fail` and `also_fail` make
 /// a program, or a program and its first argument (such as `security
 /// delete-keychain`), fail, after `on_fail` runs; `on_verify` runs on the
@@ -120,8 +117,6 @@ pub struct FakeRunner {
     /// What runs as each command starts.
     pub on_command: Option<CommandHook>,
     pub on_verify: Option<Hook>,
-    /// What `ISCC.exe /?` prints.
-    pub iscc_banner: &'static str,
     /// Whether `certutil` prints the digest in pairs separated by spaces,
     /// as older Windows does.
     pub certutil_spaced: bool,
@@ -151,7 +146,6 @@ impl FakeRunner {
             on_fail: None,
             on_command: None,
             on_verify: None,
-            iscc_banner: ISCC_BANNER,
             certutil_spaced: false,
             notarization: "Accepted",
             key_seen: None,
@@ -294,11 +288,6 @@ impl xtask::Runner for FakeRunner {
 
     fn report(&mut self, command: &mut Command) -> Result<(bool, Vec<u8>), String> {
         let recorded = self.record(command, None)?;
-        if recorded.program == "ISCC" {
-            assert_eq!(recorded.args, ["/?"]);
-            // ISCC ends `/?` with a code that says nothing of the version.
-            return Ok((false, self.iscc_banner.as_bytes().to_vec()));
-        }
         assert_eq!(recorded.args[..2], ["notarytool", "submit"]);
         let key = recorded.args.iter().position(|arg| arg == "--key").unwrap();
         self.key_seen = Some(std::fs::read(&recorded.args[key + 1]).unwrap());

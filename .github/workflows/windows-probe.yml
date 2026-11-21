@@ -42,6 +42,7 @@ jobs:
       - name: Bundle, install, URLs, uninstall (part 5d)
         if: steps.build.outcome == 'success'
         continue-on-error: true
+        timeout-minutes: 25
         shell: pwsh
         run: .github/scripts/windows-bundle.ps1
       - name: One instance and URLs (part 5c)

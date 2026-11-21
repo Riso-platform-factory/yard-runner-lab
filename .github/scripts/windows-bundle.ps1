@@ -38,6 +38,8 @@ function Check($name, $scheme, $id, $var, $dir) {
   Say "install exit=$($p.ExitCode)"
   $exe = "$env:LOCALAPPDATA\Programs\$name\$name.exe"
   Say "exe: $(Test-Path $exe)"
+  # Without the install, opening the URL shows Windows' "pick an app" dialog and waits forever.
+  if (-not (Test-Path $exe)) { Say "not installed: skipping the URL, reinstall and uninstall checks"; return }
   $v = (Get-Item $exe -ErrorAction SilentlyContinue).VersionInfo
   Say "exe version info: $($v.ProductName) $($v.ProductVersion)"
   $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\$name.lnk"
