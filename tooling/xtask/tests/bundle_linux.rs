@@ -564,3 +564,29 @@ fn a_failed_step_leaves_the_previous_package_alone() {
     assert_eq!(std::fs::read(&archive).unwrap(), b"old");
     assert_eq!(entries(&out).len(), 2);
 }
+
+#[test]
+fn a_directory_where_the_archive_goes_is_refused_and_kept() {
+    let temp = tempdir();
+    let out = temp.path().join("out");
+    let (app, archive) = previous_package(&out);
+    std::fs::remove_file(&archive).unwrap();
+    std::fs::create_dir_all(archive.join("inside")).unwrap();
+    std::fs::write(archive.join("inside/kept"), b"kept").unwrap();
+    let failure = bundle(
+        &options(&under_test("plain"), &out),
+        &mut FakeRunner::new(temp.path()),
+    )
+    .unwrap_err();
+    assert_eq!(failure.step, "archive");
+    assert_eq!(
+        failure.reason,
+        format!(
+            "{} exists and is not a file; move it away first",
+            archive.display()
+        )
+    );
+    assert_eq!(std::fs::read(archive.join("inside/kept")).unwrap(), b"kept");
+    assert_eq!(entries(&app), ["old"], "the new app was taken back");
+    assert_eq!(entries(&out).len(), 2, "the temporary folder is gone");
+}

@@ -70,7 +70,10 @@ pub fn config_in(
 /// A command as the runner was given it.
 #[derive(Debug, Clone)]
 pub struct Recorded {
+    /// The program's file name without `.exe`.
     pub program: String,
+    /// The program as it was given, a full path when it is one.
+    pub path: PathBuf,
     pub args: Vec<String>,
     /// Set variables with their value, removed ones with `None`.
     pub envs: Vec<(String, Option<String>)>,
@@ -92,8 +95,9 @@ pub type CommandHook = Box<dyn FnMut(&Recorded)>;
 pub const LOGIN_KEYCHAIN: &str = "/Users/test/Library/Keychains/login.keychain-db";
 
 /// Records every command and does only what the next step needs: `cargo
-/// build` reports `binary`, `iconutil`, `ditto`, `hdiutil`, and `tar -czf`
-/// write their output file, `shasum` and `sha256sum` print [`DIGEST`], `security list-keychains`
+/// build` reports `binary`, `iconutil`, `ditto`, `hdiutil`, `tar -czf`,
+/// Windows' `tar -a -c -f`, and `ISCC` write their output file, `shasum`,
+/// `sha256sum`, and `certutil` print [`DIGEST`], `security list-keychains`
 /// prints and sets `search_list` (at first [`LOGIN_KEYCHAIN`]),
 /// `create-keychain` writes the keychain's file as `<path>-db`,
 /// `delete-keychain` takes the keychain out of `search_list`, and
@@ -113,6 +117,9 @@ pub struct FakeRunner {
     /// What runs as each command starts.
     pub on_command: Option<CommandHook>,
     pub on_verify: Option<Hook>,
+    /// Whether `certutil` prints the digest in pairs separated by spaces,
+    /// as older Windows does.
+    pub certutil_spaced: bool,
     /// The status `notarytool submit` reports.
     pub notarization: &'static str,
     /// The notarization key's file as `notarytool submit` found it.
@@ -139,6 +146,7 @@ impl FakeRunner {
             on_fail: None,
             on_command: None,
             on_verify: None,
+            certutil_spaced: false,
             notarization: "Accepted",
             key_seen: None,
             certificate_seen: None,
@@ -153,18 +161,20 @@ impl FakeRunner {
 
     fn record(&mut self, command: &Command, input: Option<&[u8]>) -> Result<Recorded, String> {
         let recorded = Recorded {
-            // `cargo.exe` on Windows reads as `cargo`, as on other systems.
+            // `cargo.exe` reads as `cargo`, and `ISCC.exe` as `ISCC`, on
+            // every system.
             program: {
                 let name = Path::new(command.get_program())
                     .file_name()
                     .unwrap()
                     .to_string_lossy()
                     .into_owned();
-                match name.strip_suffix(std::env::consts::EXE_SUFFIX) {
-                    Some(stem) if !std::env::consts::EXE_SUFFIX.is_empty() => stem.to_owned(),
-                    _ => name,
+                match name.strip_suffix(".exe") {
+                    Some(stem) => stem.to_owned(),
+                    None => name,
                 }
             },
+            path: PathBuf::from(command.get_program()),
             args: command
                 .get_args()
                 .map(|arg| arg.to_string_lossy().into_owned())
@@ -207,7 +217,32 @@ impl xtask::Runner for FakeRunner {
         let last = recorded.args.last().map(PathBuf::from);
         match recorded.program.as_str() {
             "iconutil" | "ditto" | "hdiutil" => std::fs::write(last.unwrap(), b"made").unwrap(),
-            "tar" => std::fs::write(&recorded.args[1], b"made").unwrap(),
+            "tar" if recorded.args[0] == "-czf" => {
+                std::fs::write(&recorded.args[1], b"made").unwrap()
+            }
+            // Windows' `tar -a -c -f <zip>`.
+            "tar" => {
+                let file = recorded.args.iter().position(|arg| arg == "-f").unwrap();
+                std::fs::write(&recorded.args[file + 1], b"made").unwrap()
+            }
+            // Inno Setup writes `<OutputDir>/<OutputBaseFilename>.exe`,
+            // relative to the script.
+            "ISCC" => {
+                let script = last.unwrap();
+                let text = std::fs::read_to_string(&script).unwrap();
+                let value = |key: &str| {
+                    text.lines()
+                        .find_map(|line| line.strip_prefix(&format!("{key}=")))
+                        .unwrap()
+                        .to_owned()
+                };
+                let setup = script
+                    .parent()
+                    .unwrap()
+                    .join(value("OutputDir"))
+                    .join(format!("{}.exe", value("OutputBaseFilename")));
+                std::fs::write(setup, b"setup").unwrap();
+            }
             "codesign" if recorded.args[0] == "--verify" => {
                 if let Some(hook) = &mut self.on_verify {
                     hook(&last.unwrap());
@@ -280,6 +315,23 @@ impl xtask::Runner for FakeRunner {
                 .collect::<String>()
                 .into_bytes(),
             "shasum" | "sha256sum" => format!("{DIGEST}  {}\n", recorded.args.last().unwrap()).into_bytes(),
+            "certutil" => {
+                let digest = if self.certutil_spaced {
+                    DIGEST
+                        .as_bytes()
+                        .chunks(2)
+                        .map(|pair| std::str::from_utf8(pair).unwrap().to_uppercase())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    DIGEST.to_owned()
+                };
+                format!(
+                    "SHA256 hash of {}:\r\n{digest}\r\nCertUtil: -hashfile command completed successfully.\r\n",
+                    recorded.args[1]
+                )
+                .into_bytes()
+            }
             "cargo" | "cargo.exe" => format!(
                 "{}\n{}\n{}\n",
                 serde_json::json!({"reason": "compiler-artifact", "target": {"name": "yard_log"}, "executable": null}),

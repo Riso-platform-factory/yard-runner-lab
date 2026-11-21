@@ -124,21 +124,26 @@ The app, the zip, and the disk image are all made inside a staging folder in `--
 - It is stripped of debug data, as Zed's is.
 - `install.sh` sits inside the archive. Zed's `install.sh` is downloaded from Zed's server, and a YARD app has no server, so the script ships with the package.
 
-**The Windows installer.** Zed's `zed.iss`, cut to what YARD has:
+**The Windows installer.** Zed's `zed.iss`, cut to what YARD has. YARD's `.iss` is written from the Inno Setup documentation; only the choices come from Zed.
 
-- **Install location.** A per-user install (`PrivilegesRequired=lowest`) to `%LOCALAPPDATA%\Programs\<Name>`, with a Start-menu shortcut whose AppUserModelID is the identifier.
-- **The URL scheme, in the registry:** `HKCU\Software\Classes\<url_scheme>` with `URL Protocol`, `DefaultIcon`, and `shell\open\command "<app>.exe" "%1"`.
+- `cargo xtask bundle windows` runs on Windows only, and refuses on any other system. It needs Inno Setup 6.3 or later: `ISCC.exe` on `PATH`, else in `%ProgramFiles(x86)%\Inno Setup 6`; without it, the run is refused before building. The generated `.iss` checks the compiler's version itself, and an older one stops with "bundle windows needs Inno Setup 6.3 or later". `tar.exe` and `certutil.exe` are taken from `%SystemRoot%\System32` only.
+- It writes the installer and the zip, and prints `sha256 <hex>`, then the path, for each. The zip holds `<Name>/<Name>.exe`, made with Windows' own `tar.exe`.
+- **The review bundle.** `--dev` gives the review product, as on macOS and Linux; its shortcut and URL command run `"<Name>.exe" dev`. `--env` is refused: a shortcut and a URL command cannot set environment values.
+- **Names.** The name is used as written, spaces kept, in the folder, the `.exe`, the shortcut and the installer. A name or version Windows or Inno Setup cannot take is refused before building: `{` or `}`, a leading `@` or `-`, a reserved device name (`CON`, `NUL`, `COM1`… with any extension), a generated file name over 255 characters.
+- **Install location.** A per-user install (`PrivilegesRequired=lowest`) to `%LOCALAPPDATA%\Programs\<Name>`, with a Start-menu shortcut whose AppUserModelID is the identifier. A silent install is `<setup>.exe /VERYSILENT /SUPPRESSMSGBOXES`.
+- **The URL scheme, in the registry:** `HKCU\Software\Classes\<url_scheme>` with `URL:<Name>`, `URL Protocol`, `DefaultIcon`, and `shell\open\command "<app>.exe" "%1"`. The app takes the scheme named in its config, replacing what was there.
 - **The installer's own settings:**
-  - `AppId` is derived from the identifier.
-  - `AppMutex` names the same mutex the app creates. Both take it from one function, unlike Zed, whose installer names a different one.
-  - Uninstall removes all of the above.
+  - `AppId` is the identifier itself, so it stays the same across versions and is readable in the registry (`<identifier>_is1`). An identifier over 127 characters, Inno Setup's limit, is refused.
+  - `AppMutex` names the same mutex the app creates. Both take it from one function, unlike Zed, whose installer names a different one. Installing while the app runs stops with "Setup has detected that <Name> is currently running"; a silent install exits 1.
+  - Uninstall removes the app's folder, the shortcut, the uninstall entry, and the values it wrote under the scheme key. Other values under that key stay, and the key goes only when it is empty. The data in `%LOCALAPPDATA%\<Name>` and `%APPDATA%\<Name>` stays.
+- **Not signed yet.** With `[release.windows.signing]`, it warns "not signed: Windows signing comes with part 5e" and makes an unsigned installer.
 - **The executable.** `build.rs` makes a resource script from the config, written from Microsoft's VERSIONINFO reference, and compiles it into the `.exe` with `embed-resource`:
   - **Resource 1, the icon.** An ICO at 16, 24, 32, 48, 64, and 256 px, made from the config's PNG. GPUI loads it for the window and the taskbar.
   - **VERSIONINFO.** ProductName and FileDescription come from the name. FileVersion and ProductVersion come from the version. The numeric version is `major.minor.patch.0`, read before any `-` or `+`. A number over 65535 fails the build, naming the config. There is no CompanyName, since the config has none.
   - **Built on Windows only.** The resource compiles only on a Windows host. A Windows build made on another system has neither, and the build warns.
   - **No console.** A release build runs without a console (`windows_subsystem = "windows"`). A debug build keeps one, for the lifecycle trace.
 - **Not copied from Zed:** file associations, context menus, PATH, a WSL wrapper.
-- Signing is described in "Signing and the disk image" above, and comes with part 5 of this slice.
+- Signing is described in "Signing and the disk image" above.
 
 ### 3. The app on Linux and Windows
 
