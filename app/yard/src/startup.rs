@@ -49,6 +49,17 @@ pub fn run(
         move |urls| deliver_urls(&open_urls, urls)
     });
     app.run(move |cx: &mut App| {
+        // Windows groups the windows and the taskbar button under the
+        // identifier, the AppUserModelID that the Start-menu shortcut has too.
+        #[cfg(target_os = "windows")]
+        {
+            cx.set_app_identity(product.identifier, product.name);
+            tracing::debug!(
+                identifier = product.identifier,
+                name = product.name,
+                "app identity set"
+            );
+        }
         #[cfg(not(target_os = "macos"))]
         if let Some(listener) = instance {
             yard_shell::serve_instance_requests(cx, listener, env!("PRODUCT_URL_SCHEME"));

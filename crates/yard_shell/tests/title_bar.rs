@@ -12,7 +12,9 @@ use yard_shell::{Extension, FocusDown, FocusUp};
 
 const WIDTH: f32 = 800.;
 const HEIGHT: f32 = 600.;
-const BAR_HEIGHT: f32 = 34.;
+// The title bar's height on each platform, as Zed's `platform_title_bar_height`
+// gives it: 32 px on Windows, and at least 34 px elsewhere.
+const BAR_HEIGHT: f32 = if cfg!(windows) { 32. } else { 34. };
 const ITEM_WIDTH: f32 = 40.;
 
 fn window_frame() -> gpui::Bounds<gpui::Pixels> {

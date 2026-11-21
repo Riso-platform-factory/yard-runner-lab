@@ -46,17 +46,20 @@ fn write_in_one_step(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .write(true)
         .create_new(true)
         .open(&temporary)?;
-    let result = file
-        .write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .and_then(|()| fs::rename(&temporary, path));
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    // The handle is closed before the rename, so no handle of this write is
+    // open when the file moves: on Windows an open handle can make the move
+    // fail. `fs::rename` replaces an existing `path` on every platform, on
+    // Windows with `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`; it fails when
+    // another process holds `path` open.
     drop(file);
-    match result {
+    match written.and_then(|()| fs::rename(&temporary, path)) {
         Ok(()) => {
-            // So that the new name survives a power failure. Not every
-            // platform can sync a directory, and the content is safe anyway.
-            let synced = fs::File::open(parent).and_then(|directory| directory.sync_all());
-            if let Err(error) = synced {
+            // So that the new name survives a power failure. Not every Unix
+            // can sync a directory, and the content is safe anyway. Windows
+            // cannot open a folder as a file, and NTFS journals the rename.
+            #[cfg(unix)]
+            if let Err(error) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
                 tracing::debug!(%error, "folder not synced");
             }
             Ok(())

@@ -67,15 +67,25 @@ impl Paths {
             return Self::under_from(std::path::absolute(&home).unwrap_or(home), Origin::Home);
         }
         let home = dirs::home_dir().expect("home directory is available");
-        let config = xdg_config
-            .map(PathBuf::from)
-            // As the XDG specification says, a relative path is ignored.
-            .filter(|dir| dir.is_absolute())
-            .unwrap_or_else(|| home.join(".config"))
-            .join(name);
-        let data = dirs::data_dir()
-            .expect("data directory is available")
-            .join(name);
+        // As Zed's: on Windows, settings in `%APPDATA%` and data in
+        // `%LOCALAPPDATA%`, with no XDG variable.
+        let config = if cfg!(target_os = "windows") {
+            dirs::config_dir().expect("config directory is available")
+        } else {
+            xdg_config
+                .map(PathBuf::from)
+                // As the XDG specification says, a relative path is ignored.
+                .filter(|dir| dir.is_absolute())
+                .unwrap_or_else(|| home.join(".config"))
+        }
+        .join(name);
+        let data = if cfg!(target_os = "windows") {
+            dirs::data_local_dir()
+        } else {
+            dirs::data_dir()
+        }
+        .expect("data directory is available")
+        .join(name);
         let logs = if cfg!(target_os = "macos") {
             home.join("Library/Logs").join(name)
         } else {
@@ -170,6 +180,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn empty_home_is_ignored_and_xdg_config_is_used() {
         let xdg = tempfile::tempdir().unwrap();
         let paths = Paths::resolve("testapp", Some("".into()), Some(xdg.path().into()));
@@ -179,6 +190,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn relative_xdg_config_is_ignored() {
         let paths = Paths::resolve("testapp", None, Some("relative".into()));
         assert_eq!(paths.origin(), Origin::Platform);
@@ -190,8 +202,27 @@ mod tests {
 
     #[test]
     fn platform_directories_use_the_product_name() {
-        let paths = Paths::resolve("my-app 2", None, None);
+        let paths = Paths::resolve("my-app 2", None, Some("/elsewhere".into()));
         assert_eq!(paths.origin(), Origin::Platform);
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                paths.config_dir(),
+                dirs::config_dir().unwrap().join("my-app 2")
+            );
+            assert_eq!(
+                paths.data_dir(),
+                dirs::data_local_dir().unwrap().join("my-app 2")
+            );
+            assert_eq!(
+                paths.logs_dir(),
+                dirs::data_local_dir()
+                    .unwrap()
+                    .join("my-app 2")
+                    .join("logs")
+            );
+            return;
+        }
+        let paths = Paths::resolve("my-app 2", None, None);
         assert!(paths.config_dir().ends_with(".config/my-app 2"));
         if cfg!(target_os = "macos") {
             assert!(

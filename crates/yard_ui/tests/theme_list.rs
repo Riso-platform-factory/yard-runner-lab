@@ -221,7 +221,10 @@ fn choosing_a_name_that_is_not_registered_writes_nothing(cx: &mut TestAppContext
     cx.read(|cx| assert_eq!(active_theme(cx), "One Dark"));
 
     // A fixed modification time makes any rewrite of the file visible.
-    fs::File::open(&settings)
+    // Windows sets a time only through a handle open for writing.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&settings)
         .unwrap()
         .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000))
         .unwrap();

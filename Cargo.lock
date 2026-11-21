@@ -7861,6 +7861,7 @@ name = "yard"
 version = "0.1.0"
 dependencies = [
  "command_palette",
+ "embed-resource",
  "gpui",
  "gpui_platform",
  "image",
@@ -7868,6 +7869,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+ "ui_gallery",
  "yard_build_config",
  "yard_keymap",
  "yard_layout",
@@ -8001,6 +8003,7 @@ dependencies = [
  "tracing",
  "ui",
  "unicode-segmentation",
+ "windows 0.62.2",
  "yard_settings",
 ]
 

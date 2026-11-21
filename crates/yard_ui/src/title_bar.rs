@@ -2,7 +2,10 @@
 //! ddb90e5e89d346f21847281727e1644b8bb2cc37, licensed GPL-3.0-or-later.
 //! Copyright Zed Industries, Inc.
 
-use crate::{DrawnSides, Platform, WindowButtons, WindowControlAction, drawn_sides, h_flex};
+use crate::{
+    DrawnSides, Platform, WindowButtons, WindowControlAction, WindowsWindowButtons, drawn_sides,
+    draws_windows_buttons, h_flex,
+};
 use gpui::{
     AnyElement, App, Decorations, ElementId, InteractiveElement, IntoElement, MouseButton,
     ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, TitlebarOptions,
@@ -27,6 +30,10 @@ pub struct TitleBar {
     left: Vec<AnyElement>,
     center: Vec<AnyElement>,
     right: Vec<AnyElement>,
+    /// The platform, decorations, and button layout a test draws the bar's
+    /// window buttons for, in place of the host's.
+    #[cfg(test)]
+    host: Option<(Platform, Decorations, Option<gpui::WindowButtonLayout>)>,
 }
 
 impl TitleBar {
@@ -36,7 +43,23 @@ impl TitleBar {
             left: Vec::new(),
             center: Vec::new(),
             right: Vec::new(),
+            #[cfg(test)]
+            host: None,
         }
+    }
+
+    /// The platform, decorations, and button layout the window buttons are
+    /// drawn for.
+    fn host(
+        &self,
+        decorations: Decorations,
+        cx: &App,
+    ) -> (Platform, Decorations, Option<gpui::WindowButtonLayout>) {
+        #[cfg(test)]
+        if let Some(host) = self.host {
+            return host;
+        }
+        (Platform::CURRENT, decorations, cx.button_layout())
     }
 
     pub fn left(mut self, child: impl IntoElement) -> Self {
@@ -64,11 +87,15 @@ impl RenderOnce for TitleBar {
         let decorations = window.window_decorations();
         let supported = window.window_controls();
         let color = cx.theme().colors().title_bar_background;
+        let (platform, button_decorations, layout) = self.host(decorations, cx);
         let DrawnSides { left, right } = if fullscreen {
             DrawnSides::default()
         } else {
-            drawn_sides(Platform::CURRENT, decorations, cx.button_layout())
+            drawn_sides(platform, button_decorations, layout)
         };
+        // On Windows the system moves, maximizes, and opens the menu from the
+        // bar itself, through its control area.
+        let windows_buttons = draws_windows_buttons(platform, fullscreen);
         // On Linux the window manager moves the window once the pointer moves
         // with the button down, so that a click and a double-click still
         // reach the bar.
@@ -154,34 +181,39 @@ impl RenderOnce for TitleBar {
                     .border(CLIENT_SIDE_DECORATION_BORDER)
                     .border_color(color),
             })
-            .when_some(left, |bar, buttons| {
-                bar.child(WindowButtons::new("left-window-controls", buttons))
-            })
+            // The window buttons are inside the two sides, which share the
+            // width the center leaves, so that the center stays in the middle.
             .child(
-                h_flex().h_full().flex_1().child(
-                    h_flex()
-                        .h_full()
-                        .map(|bar| {
-                            if mac_traffic_lights {
-                                bar.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
-                            } else if left.is_some() {
-                                bar
-                            } else {
-                                bar.pl_2()
-                            }
-                        })
-                        .when(!self.left.is_empty(), |bar| {
-                            bar.child(
-                                h_flex()
-                                    .h_full()
-                                    .gap_1()
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                        cx.stop_propagation();
-                                    })
-                                    .children(self.left),
-                            )
-                        }),
-                ),
+                h_flex()
+                    .h_full()
+                    .flex_1()
+                    .when_some(left, |side, buttons| {
+                        side.child(WindowButtons::new("left-window-controls", buttons))
+                    })
+                    .child(
+                        h_flex()
+                            .h_full()
+                            .map(|bar| {
+                                if mac_traffic_lights {
+                                    bar.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
+                                } else if left.is_some() {
+                                    bar
+                                } else {
+                                    bar.pl_2()
+                                }
+                            })
+                            .when(!self.left.is_empty(), |bar| {
+                                bar.child(
+                                    h_flex()
+                                        .h_full()
+                                        .gap_1()
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .children(self.left),
+                                )
+                            }),
+                    ),
             )
             .when(!self.center.is_empty(), |bar| {
                 bar.child(
@@ -195,25 +227,35 @@ impl RenderOnce for TitleBar {
                 )
             })
             .child(
-                h_flex().h_full().flex_1().justify_end().child(
-                    h_flex()
-                        .h_full()
-                        .when(right.is_none(), |bar| bar.pr_2())
-                        .when(!self.right.is_empty(), |bar| {
-                            bar.child(
-                                h_flex()
-                                    .h_full()
-                                    .gap_1()
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                        cx.stop_propagation();
-                                    })
-                                    .children(self.right),
-                            )
-                        }),
-                ),
+                h_flex()
+                    .h_full()
+                    .flex_1()
+                    .justify_end()
+                    .child(
+                        h_flex()
+                            .h_full()
+                            .when(right.is_none() && !windows_buttons, |bar| bar.pr_2())
+                            .when(!self.right.is_empty(), |bar| {
+                                bar.child(
+                                    h_flex()
+                                        .h_full()
+                                        .gap_1()
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .children(self.right),
+                                )
+                            }),
+                    )
+                    .when_some(right, |side, buttons| {
+                        side.child(WindowButtons::new("right-window-controls", buttons))
+                    })
+                    .when(windows_buttons, |side| {
+                        side.child(WindowsWindowButtons::new("windows-window-controls"))
+                    }),
             )
-            .when_some(right, |bar, buttons| {
-                bar.child(WindowButtons::new("right-window-controls", buttons))
-            })
     }
 }
+
+#[cfg(test)]
+mod tests;

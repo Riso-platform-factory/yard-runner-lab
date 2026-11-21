@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Context, IntoElement, ParentElement, Render, Styled, Window, WindowButton,
     rems,
 };
-use yard_ui::{Label, LabelSize, TextColor, WindowButtons, h_flex, v_flex};
+use yard_ui::{Label, LabelSize, TextColor, WindowButtons, WindowsWindowButtons, h_flex, v_flex};
 
 pub(super) fn register(cx: &mut App, ext: &yard_shell::Extension) {
     ext.register(cx, "ui_gallery.window_controls", &[], |_, _, _, cx| {
@@ -29,7 +29,7 @@ pub(super) fn place_alone(cx: &mut App, ext: &yard_shell::Extension) {
 
 struct WindowControlsPage;
 
-fn row(name: &str, buttons: WindowButtons) -> impl IntoElement {
+fn row(name: &str, buttons: impl IntoElement) -> impl IntoElement {
     h_flex()
         .gap(rems(0.75))
         .child(
@@ -90,6 +90,30 @@ impl Render for WindowControlsPage {
                     .child(row(
                         "Hover close",
                         WindowButtons::new("hover-close", default.right)
+                            .maximized(false)
+                            .hovered(WindowButton::Close),
+                    )),
+            ))
+            .child(crate::group(
+                "Windows",
+                v_flex()
+                    .gap(rems(0.5))
+                    .child(row(
+                        "Normal",
+                        WindowsWindowButtons::new("windows-normal")
+                            .preview()
+                            .maximized(false),
+                    ))
+                    .child(row(
+                        "Maximized",
+                        WindowsWindowButtons::new("windows-maximized")
+                            .preview()
+                            .maximized(true),
+                    ))
+                    .child(row(
+                        "Hover close",
+                        WindowsWindowButtons::new("windows-hover-close")
+                            .preview()
                             .maximized(false)
                             .hovered(WindowButton::Close),
                     )),

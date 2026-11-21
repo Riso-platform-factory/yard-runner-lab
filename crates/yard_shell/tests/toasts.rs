@@ -5,7 +5,9 @@ use yard_ui::{Toast, ToastKind};
 
 const WIDTH: f32 = 800.;
 const HEIGHT: f32 = 600.;
-const TITLE_BAR: f32 = 34.;
+// The title bar's height on each platform, as Zed's `platform_title_bar_height`
+// gives it: 32 px on Windows, and at least 34 px elsewhere.
+const TITLE_BAR: f32 = if cfg!(windows) { 32. } else { 34. };
 // The toast's bottom edge rests this far above the window's bottom edge.
 const TOAST_LIFT: f32 = 40.;
 const TOAST_LIFETIME: Duration = Duration::from_secs(10);

@@ -2,14 +2,18 @@
 //! ddb90e5e89d346f21847281727e1644b8bb2cc37, licensed GPL-3.0-or-later.
 //! Copyright Zed Industries, Inc.
 //!
+//! `WindowsWindowButtons` adapts `WindowsWindowControls` and
+//! `WindowsCaptionButton`, from `platforms/platform_windows.rs`.
+//!
 //! `parse_button_layout` adapts GPUI's `WindowButtonLayout::parse`, from the
 //! same revision, licensed Apache-2.0. Copyright Zed Industries, Inc.
 
 use crate::{IconName, h_flex};
 use gpui::{
-    App, Decorations, ElementId, InteractiveElement, IntoElement, MAX_BUTTONS_PER_SIDE,
-    MouseButton, ParentElement, Pixels, Point, RenderOnce, ResizeEdge, StatefulInteractiveElement,
-    Styled, Window, WindowButton, WindowButtonLayout, WindowControls, prelude::FluentBuilder, svg,
+    App, ClickEvent, Decorations, ElementId, Hsla, InteractiveElement, IntoElement,
+    MAX_BUTTONS_PER_SIDE, MouseButton, ParentElement, Pixels, Point, RenderOnce, ResizeEdge, Rgba,
+    StatefulInteractiveElement, Styled, Window, WindowButton, WindowButtonLayout,
+    WindowControlArea, WindowControls, div, prelude::FluentBuilder, px, svg,
 };
 use theme::ActiveTheme;
 
@@ -128,6 +132,13 @@ pub(crate) fn drawn_sides(
     }
 }
 
+/// Whether the title bar draws the Windows caption buttons: on Windows,
+/// whenever the window is not fullscreen. Windows has no choice of
+/// decorations, so they do not depend on it.
+pub(crate) fn draws_windows_buttons(platform: Platform, fullscreen: bool) -> bool {
+    platform == Platform::Windows && !fullscreen
+}
+
 /// The buttons of `side` that the platform supports, in order. Close is
 /// always supported.
 pub(crate) fn shown_buttons(side: &ButtonSide, supported: WindowControls) -> Vec<WindowButton> {
@@ -169,6 +180,14 @@ impl WindowControlAction {
             Self::Resize(_) => "resize",
             Self::Menu(_) => "menu",
         }
+    }
+
+    /// Logs an action that the system does itself: on Windows a caption
+    /// button is a control area of the window, so Windows minimizes,
+    /// maximizes, restores, or closes it once the click ends.
+    pub fn leave_to_system(self) {
+        let _group = tracing::info_span!("window-control", action = self.name()).entered();
+        tracing::debug!("left to the system");
     }
 
     /// Asks the window to do it.
@@ -226,6 +245,36 @@ impl Kind {
             Kind::Restore => IconName::GenericRestore,
             Kind::Maximize => IconName::GenericMaximize,
             Kind::Close => IconName::GenericClose,
+        }
+    }
+
+    /// The element ID of the Windows caption button.
+    fn windows_id(self) -> &'static str {
+        match self {
+            Kind::Minimize => "minimize",
+            Kind::Restore => "restore",
+            Kind::Maximize => "maximize",
+            Kind::Close => "close",
+        }
+    }
+
+    /// The glyph of the Windows caption button, in Segoe Fluent Icons and
+    /// Segoe MDL2 Assets alike.
+    fn glyph(self) -> &'static str {
+        match self {
+            Kind::Minimize => "\u{e921}",
+            Kind::Restore => "\u{e923}",
+            Kind::Maximize => "\u{e922}",
+            Kind::Close => "\u{e8bb}",
+        }
+    }
+
+    /// The part of the window that Windows hit-tests the caption button as.
+    fn control_area(self) -> WindowControlArea {
+        match self {
+            Kind::Minimize => WindowControlArea::Min,
+            Kind::Restore | Kind::Maximize => WindowControlArea::Max,
+            Kind::Close => WindowControlArea::Close,
         }
     }
 
@@ -353,6 +402,214 @@ impl RenderOnce for WindowButtons {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .children(elements)
         })
+    }
+}
+
+/// The Windows caption buttons, in order: minimize, maximize or restore, and
+/// close.
+fn windows_buttons(maximized: bool) -> [Kind; 3] {
+    [
+        Kind::Minimize,
+        if maximized {
+            Kind::Restore
+        } else {
+            Kind::Maximize
+        },
+        Kind::Close,
+    ]
+}
+
+/// The height of Zed's title bar on Windows, which the caption buttons fill.
+const WINDOWS_CAPTION_HEIGHT: Pixels = px(32.);
+
+const FLUENT_ICONS: &str = "Segoe Fluent Icons";
+#[cfg(any(target_os = "windows", test))]
+const MDL2_ASSETS: &str = "Segoe MDL2 Assets";
+
+/// The font of the caption glyphs for a Windows build: Segoe Fluent Icons
+/// from Windows 11's build 22000, and Segoe MDL2 Assets before it, or when the
+/// build is unknown.
+#[cfg(any(target_os = "windows", test))]
+fn caption_font_for(build: Option<u32>) -> &'static str {
+    match build {
+        Some(build) if build >= 22000 => FLUENT_ICONS,
+        _ => MDL2_ASSETS,
+    }
+}
+
+/// The font of the caption glyphs. Elsewhere than on Windows, where only the
+/// gallery draws them, Segoe Fluent Icons, which may not be installed.
+#[cfg(not(target_os = "windows"))]
+fn caption_font() -> &'static str {
+    FLUENT_ICONS
+}
+
+/// The font of the caption glyphs for the Windows YARD runs on, asked of
+/// Windows once.
+#[cfg(target_os = "windows")]
+fn caption_font() -> &'static str {
+    static FONT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        use windows::Wdk::System::SystemServices::RtlGetVersion;
+        use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+
+        // SAFETY: a zeroed `OSVERSIONINFOW` is valid; `RtlGetVersion` reads
+        // its size and fills the rest.
+        let mut version: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+        version.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+        let status = unsafe { RtlGetVersion(&mut version) };
+        let build = if status.is_ok() {
+            Some(version.dwBuildNumber)
+        } else {
+            tracing::debug!(
+                status = status.0,
+                "the Windows version is unknown, so the caption buttons fall back"
+            );
+            None
+        };
+        let font = caption_font_for(build);
+        tracing::debug!(?build, font, "caption font chosen");
+        font
+    })
+}
+
+/// The control area of a caption button: none for a preview, which only
+/// shows the button.
+fn caption_control_area(kind: Kind, preview: bool) -> Option<WindowControlArea> {
+    (!preview).then(|| kind.control_area())
+}
+
+/// Whether a click on a caption button is one that Windows acts on: a release
+/// of the left button. Windows ignores the right button there, though GPUI
+/// may end a left press with it.
+fn windows_acts_on(event: &ClickEvent) -> bool {
+    matches!(event, ClickEvent::Mouse(click) if click.up.button == MouseButton::Left)
+}
+
+/// Minimize, maximize or restore, and close, drawn as Zed draws them on
+/// Windows. Each button is a control area of the window, so Windows does what
+/// it asks, and shows Snap layouts on maximize; the button only logs the
+/// click. By default it follows the window it is in; `maximized` and
+/// `hovered` set the state it draws instead, and `preview` makes it inert, so
+/// that it can be shown in any window.
+#[derive(IntoElement)]
+pub struct WindowsWindowButtons {
+    id: ElementId,
+    maximized: Option<bool>,
+    hovered: Option<WindowButton>,
+    preview: bool,
+}
+
+impl WindowsWindowButtons {
+    pub fn new(id: impl Into<ElementId>) -> Self {
+        Self {
+            id: id.into(),
+            maximized: None,
+            hovered: None,
+            preview: false,
+        }
+    }
+
+    /// Only shows the buttons, as a gallery does: they are no control area of
+    /// the window, and a click logs nothing. They still draw the hover.
+    pub fn preview(mut self) -> Self {
+        self.preview = true;
+        self
+    }
+
+    /// Draws restore in place of maximize when `true`.
+    pub fn maximized(mut self, maximized: bool) -> Self {
+        self.maximized = Some(maximized);
+        self
+    }
+
+    /// Draws `button` as if the pointer were on it.
+    pub fn hovered(mut self, button: WindowButton) -> Self {
+        self.hovered = Some(button);
+        self
+    }
+}
+
+impl RenderOnce for WindowsWindowButtons {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let maximized = self.maximized.unwrap_or_else(|| window.is_maximized());
+        let preview = self.preview;
+        tracing::trace!(maximized, preview, "rendering windows caption buttons");
+        let colors = cx.theme().colors();
+        let close_red: Hsla = Rgba {
+            r: 232.0 / 255.0,
+            g: 17.0 / 255.0,
+            b: 32.0 / 255.0,
+            a: 1.0,
+        }
+        .into();
+        let buttons = windows_buttons(maximized).map(|kind| {
+            let enabled = match kind {
+                Kind::Minimize => window.is_minimizable(),
+                Kind::Restore | Kind::Maximize => window.is_resizable(),
+                Kind::Close => true,
+            };
+            let (hover_bg, hover_fg, active_bg, active_fg) = match kind {
+                Kind::Close => (
+                    close_red,
+                    gpui::white(),
+                    close_red.opacity(0.8),
+                    gpui::white().opacity(0.8),
+                ),
+                _ => (
+                    colors.ghost_element_hover,
+                    colors.text,
+                    colors.ghost_element_active,
+                    colors.text,
+                ),
+            };
+            let button = match kind {
+                Kind::Minimize => WindowButton::Minimize,
+                Kind::Restore | Kind::Maximize => WindowButton::Maximize,
+                Kind::Close => WindowButton::Close,
+            };
+            let hovered = enabled && self.hovered == Some(button);
+            h_flex()
+                .id(kind.windows_id())
+                .justify_center()
+                .content_center()
+                .occlude()
+                .w(px(36.))
+                .h_full()
+                .text_size(px(10.0))
+                .when(!enabled, |style| style.text_color(colors.text_disabled))
+                .when(hovered, |style| style.bg(hover_bg).text_color(hover_fg))
+                .when(enabled, |style| {
+                    style
+                        .hover(|style| style.bg(hover_bg).text_color(hover_fg))
+                        .active(|style| style.bg(active_bg).text_color(active_fg))
+                })
+                .when(enabled && !preview, |style| {
+                    // Windows still sends the press and the release here,
+                    // and acts after them unless an element stops them, so
+                    // this only logs.
+                    style.on_click(move |event, _, _| {
+                        if windows_acts_on(event) {
+                            kind.action().leave_to_system();
+                        }
+                    })
+                })
+                .when_some(caption_control_area(kind, preview), |style, area| {
+                    style.window_control_area(area)
+                })
+                .child(kind.glyph())
+        });
+
+        div()
+            .id(self.id)
+            .font_family(caption_font())
+            .flex()
+            .flex_row()
+            .justify_center()
+            .content_stretch()
+            .max_h(WINDOWS_CAPTION_HEIGHT)
+            .min_h(WINDOWS_CAPTION_HEIGHT)
+            .children(buttons)
     }
 }
 

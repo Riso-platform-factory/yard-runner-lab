@@ -23,7 +23,8 @@ fn only_yard_ui_depends_on_zeds_gpl_crates() {
         .expect("cargo metadata runs");
     assert!(
         output.status.success(),
-        "cargo metadata failed: {}",
+        "cargo metadata --offline failed; it needs every crate of every platform \
+         in Cargo's cache, which `cargo fetch` downloads: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let metadata: Value = serde_json::from_slice(&output.stdout).expect("cargo metadata is JSON");

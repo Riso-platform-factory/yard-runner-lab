@@ -585,11 +585,6 @@ fn a_bad_release_table_is_refused_naming_the_key() {
             "missing or not a file",
         ),
         (
-            "[release.macos]\nentitlements = \"/etc/hosts\"\n",
-            "release.macos.entitlements",
-            "relative",
-        ),
-        (
             "[release.macos.signing]\n",
             "release.macos.signing.identity",
             "non-empty",
@@ -627,6 +622,19 @@ fn a_bad_release_table_is_refused_naming_the_key() {
     ] {
         release_refused(release, key, reason);
     }
+    // An absolute path to a file that exists on every system, in a TOML
+    // basic string, with `\` and `"` escaped, so any checkout path reads back.
+    let absolute = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let escaped = absolute
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    release_refused(
+        &format!("[release.macos]\nentitlements = \"{escaped}\"\n"),
+        "release.macos.entitlements",
+        "relative",
+    );
 }
 
 #[test]

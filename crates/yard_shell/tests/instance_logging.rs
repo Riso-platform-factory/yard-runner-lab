@@ -40,7 +40,7 @@ impl tracing::field::Visit for Fields {
         let value = format!("{value:?}").replace('"', "");
         let value = match field.name() {
             // The socket's folder differs from run to run.
-            "socket" => value.rsplit('/').next().unwrap().to_owned(),
+            "socket" => value.rsplit(['/', '\\']).next().unwrap().to_owned(),
             // Only the start of a refusal's text, which names the error.
             "message" => value.split(" (").next().unwrap().to_owned(),
             _ => value,

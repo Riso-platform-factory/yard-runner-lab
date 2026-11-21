@@ -258,7 +258,10 @@ fn the_same_value_writes_nothing(cx: &mut TestAppContext) {
     let path = temp.path().join("settings.json");
     fs::write(&path, r#"{"first": {"greeting": "hi", "size": 3}}"#).unwrap();
     // A fixed modification time makes any rewrite visible on every filesystem.
-    fs::File::open(&path)
+    // Windows sets a time only through a handle open for writing.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
         .unwrap()
         .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000))
         .unwrap();

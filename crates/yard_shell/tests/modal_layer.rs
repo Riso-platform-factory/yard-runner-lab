@@ -7,7 +7,9 @@ use yard_shell::Extension;
 
 const WIDTH: f32 = 800.;
 const HEIGHT: f32 = 600.;
-const TITLE_BAR: f32 = 34.;
+// The title bar's height on each platform, as Zed's `platform_title_bar_height`
+// gives it: 32 px on Windows, and at least 34 px elsewhere.
+const TITLE_BAR: f32 = if cfg!(windows) { 32. } else { 34. };
 // 5 rems at the default 16px rem.
 const MODAL_TOP: f32 = 80.;
 const MODAL_WIDTH: f32 = 240.;

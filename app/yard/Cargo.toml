@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = ["dev"]
-dev = ["yard_log/dev", "yard_product/dev", "yard_paths/dev", "yard_ui/dev", "yard_layout/dev", "yard_shell/dev", "yard_settings/dev", "yard_keymap/dev", "command_palette/dev", "yard_update/dev", "yard_build_config/dev"]
+dev = ["yard_log/dev", "yard_product/dev", "yard_paths/dev", "yard_ui/dev", "yard_layout/dev", "yard_shell/dev", "yard_settings/dev", "yard_keymap/dev", "command_palette/dev", "yard_update/dev", "yard_build_config/dev", "dep:ui_gallery"]
 
 [dependencies]
 gpui.workspace = true
@@ -28,15 +28,23 @@ command_palette = { workspace = true, default-features = false }
 yard_update = { workspace = true, default-features = false }
 reqwest_client = { workspace = true }
 
+ui_gallery = { path = "../../examples/ui_gallery", optional = true }
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 image.workspace = true
 
 [dev-dependencies]
-image.workspace = true
+# `ico` for the tests of `build.rs`, which include it.
+image = { workspace = true, features = ["ico"] }
 serde_json.workspace = true
 tempfile.workspace = true
 yard_build_config = { workspace = true, default-features = false }
 
 [build-dependencies]
 yard_build_config = { workspace = true, default-features = false }
-image.workspace = true
+# `ico` for the `.exe`'s icon.
+image = { workspace = true, features = ["ico"] }
+
+# The Windows resource, with the icon and the version, compiled on Windows.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource.workspace = true

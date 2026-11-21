@@ -594,15 +594,22 @@ fn write_operations_open_groups_and_log_every_contract_line(cx: &mut TestAppCont
             );
         }
 
-        // A file that cannot be written: the directory refuses a new file.
+        // A file that cannot be written. On Unix the directory refuses a new
+        // file; on Windows, where a read-only folder still takes new files,
+        // another handle holds the file open, sharing it for reading only, so
+        // the file can be read but not replaced.
         let sealed_dir = temp.path().join("sealed");
         fs::create_dir_all(&sealed_dir).unwrap();
         let sealed_path = sealed_dir.join("settings.json");
         fs::write(&sealed_path, r#"{"first": {"size": 7}}"#).unwrap();
+        #[cfg(unix)]
         let original = fs::metadata(&sealed_dir).unwrap().permissions();
-        let mut read_only = original.clone();
-        read_only.set_readonly(true);
-        fs::set_permissions(&sealed_dir, read_only).unwrap();
+        #[cfg(unix)]
+        {
+            let mut read_only = original.clone();
+            read_only.set_readonly(true);
+            fs::set_permissions(&sealed_dir, read_only).unwrap();
+        }
 
         let app = cx.new_app();
         app.update(|cx| {
@@ -610,6 +617,16 @@ fn write_operations_open_groups_and_log_every_contract_line(cx: &mut TestAppCont
             load(cx, sealed_path.clone());
             register::<First>(cx);
         });
+        #[cfg(windows)]
+        let held = {
+            use std::os::windows::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .read(true)
+                // FILE_SHARE_READ
+                .share_mode(0x1)
+                .open(&sealed_path)
+                .unwrap()
+        };
         {
             let captured = CAPTURED.lock().unwrap();
             groups_cursor = captured.groups.len();
@@ -632,9 +649,12 @@ fn write_operations_open_groups_and_log_every_contract_line(cx: &mut TestAppCont
             );
         }
 
-        // The directory is made writable again so the temporary tree cleans up,
-        // and the file kept its content.
+        // The directory is made writable again, or the file is let go, so the
+        // temporary tree cleans up, and the file kept its content.
+        #[cfg(unix)]
         fs::set_permissions(&sealed_dir, original).unwrap();
+        #[cfg(windows)]
+        drop(held);
         assert_eq!(
             fs::read_to_string(&sealed_path).unwrap(),
             r#"{"first": {"size": 7}}"#
