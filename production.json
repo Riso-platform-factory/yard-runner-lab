@@ -14,7 +14,7 @@
   },
   "yard/startup": {
     "files": {
-      "app/yard/src/startup.rs": "730daae2d85e1ea7"
+      "app/yard/src/startup.rs": "8cb11240a6c97f5d"
     },
     "promoted": "2026-11-21"
   },
@@ -57,9 +57,9 @@
   },
   "yard_log/diagnostic_log": {
     "files": {
-      "crates/yard_log/src/diagnostic_log.rs": "2fa2fc4807c24f96"
+      "crates/yard_log/src/diagnostic_log.rs": "6bd0a1324c402ebd"
     },
-    "promoted": "2026-11-20"
+    "promoted": "2026-11-21"
   },
   "yard_log/lifecycle_trace": {
     "files": {
@@ -151,9 +151,9 @@
   },
   "yard_product/product": {
     "files": {
-      "crates/yard_product/src/product.rs": "0184f89622e6d535"
+      "crates/yard_product/src/product.rs": "1ce17873d6430532"
     },
-    "promoted": "2026-11-20"
+    "promoted": "2026-11-21"
   },
   "yard_settings/sections": {
     "files": {
@@ -169,7 +169,7 @@
   },
   "yard_shell/instance": {
     "files": {
-      "crates/yard_shell/src/instance.rs": "49e6e170efa3194d"
+      "crates/yard_shell/src/instance.rs": "f5b59213c71f4fef"
     },
     "promoted": "2026-11-21"
   },
