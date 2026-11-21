@@ -231,6 +231,29 @@ fn each_windows_button_is_its_control_area_with_its_glyph() {
 }
 
 #[test]
+fn a_preview_button_is_no_control_area() {
+    for kind in windows_buttons(false)
+        .into_iter()
+        .chain(windows_buttons(true))
+    {
+        assert_eq!(caption_control_area(kind, true), None, "{kind:?}");
+        assert_eq!(
+            caption_control_area(kind, false),
+            Some(kind.control_area()),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn windows_build_22000_and_later_use_segoe_fluent_icons() {
+    assert_eq!(caption_font_for(Some(22000)), "Segoe Fluent Icons");
+    assert_eq!(caption_font_for(Some(26100)), "Segoe Fluent Icons");
+    assert_eq!(caption_font_for(Some(19045)), "Segoe MDL2 Assets");
+    assert_eq!(caption_font_for(None), "Segoe MDL2 Assets");
+}
+
+#[test]
 fn this_mac_build_is_the_mac_platform() {
     if cfg!(target_os = "macos") {
         assert_eq!(Platform::CURRENT, Platform::Mac);
@@ -295,6 +318,11 @@ impl gpui::Render for Buttons {
             .child(WindowsWindowButtons::new("windows"))
             .child(WindowsWindowButtons::new("windows-maximized").maximized(true))
             .child(WindowsWindowButtons::new("windows-hovered").hovered(Close))
+            .child(
+                WindowsWindowButtons::new("windows-preview")
+                    .preview()
+                    .hovered(Close),
+            )
             .child(
                 WindowButtons::new("closed-only", right).supported(WindowControls {
                     fullscreen: false,

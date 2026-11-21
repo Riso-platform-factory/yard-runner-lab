@@ -10,8 +10,8 @@
 
 use crate::{IconName, h_flex};
 use gpui::{
-    App, Decorations, ElementId, Hsla, InteractiveElement, IntoElement, MAX_BUTTONS_PER_SIDE,
-    MouseButton, ParentElement, Pixels, Point, RenderOnce, ResizeEdge, Rgba,
+    App, ClickEvent, Decorations, ElementId, Hsla, InteractiveElement, IntoElement,
+    MAX_BUTTONS_PER_SIDE, MouseButton, ParentElement, Pixels, Point, RenderOnce, ResizeEdge, Rgba,
     StatefulInteractiveElement, Styled, Window, WindowButton, WindowButtonLayout,
     WindowControlArea, WindowControls, div, prelude::FluentBuilder, px, svg,
 };
@@ -422,40 +422,82 @@ fn windows_buttons(maximized: bool) -> [Kind; 3] {
 /// The height of Zed's title bar on Windows, which the caption buttons fill.
 const WINDOWS_CAPTION_HEIGHT: Pixels = px(32.);
 
-/// The font of the caption glyphs: Segoe Fluent Icons from Windows 11's
-/// build 22000, and Segoe MDL2 Assets before it. Elsewhere, where only the
+const FLUENT_ICONS: &str = "Segoe Fluent Icons";
+#[cfg(any(target_os = "windows", test))]
+const MDL2_ASSETS: &str = "Segoe MDL2 Assets";
+
+/// The font of the caption glyphs for a Windows build: Segoe Fluent Icons
+/// from Windows 11's build 22000, and Segoe MDL2 Assets before it, or when the
+/// build is unknown.
+#[cfg(any(target_os = "windows", test))]
+fn caption_font_for(build: Option<u32>) -> &'static str {
+    match build {
+        Some(build) if build >= 22000 => FLUENT_ICONS,
+        _ => MDL2_ASSETS,
+    }
+}
+
+/// The font of the caption glyphs. Elsewhere than on Windows, where only the
 /// gallery draws them, Segoe Fluent Icons, which may not be installed.
 #[cfg(not(target_os = "windows"))]
 fn caption_font() -> &'static str {
-    "Segoe Fluent Icons"
+    FLUENT_ICONS
 }
 
+/// The font of the caption glyphs for the Windows YARD runs on, asked of
+/// Windows once.
 #[cfg(target_os = "windows")]
 fn caption_font() -> &'static str {
-    use windows::Wdk::System::SystemServices::RtlGetVersion;
+    static FONT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        use windows::Wdk::System::SystemServices::RtlGetVersion;
+        use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 
-    // SAFETY: `RtlGetVersion` fills the zeroed structure it is given.
-    let mut version = unsafe { std::mem::zeroed() };
-    let status = unsafe { RtlGetVersion(&mut version) };
+        // SAFETY: a zeroed `OSVERSIONINFOW` is valid; `RtlGetVersion` reads
+        // its size and fills the rest.
+        let mut version: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+        version.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+        let status = unsafe { RtlGetVersion(&mut version) };
+        let build = if status.is_ok() {
+            Some(version.dwBuildNumber)
+        } else {
+            tracing::debug!(
+                status = status.0,
+                "the Windows version is unknown, so the caption buttons fall back"
+            );
+            None
+        };
+        let font = caption_font_for(build);
+        tracing::debug!(?build, font, "caption font chosen");
+        font
+    })
+}
 
-    if status.is_ok() && version.dwBuildNumber >= 22000 {
-        "Segoe Fluent Icons"
-    } else {
-        "Segoe MDL2 Assets"
-    }
+/// The control area of a caption button: none for a preview, which only
+/// shows the button.
+fn caption_control_area(kind: Kind, preview: bool) -> Option<WindowControlArea> {
+    (!preview).then(|| kind.control_area())
+}
+
+/// Whether a click on a caption button is one that Windows acts on: a release
+/// of the left button. Windows ignores the right button there, though GPUI
+/// may end a left press with it.
+fn windows_acts_on(event: &ClickEvent) -> bool {
+    matches!(event, ClickEvent::Mouse(click) if click.up.button == MouseButton::Left)
 }
 
 /// Minimize, maximize or restore, and close, drawn as Zed draws them on
 /// Windows. Each button is a control area of the window, so Windows does what
 /// it asks, and shows Snap layouts on maximize; the button only logs the
 /// click. By default it follows the window it is in; `maximized` and
-/// `hovered` set the state it draws instead, so that it can be shown in any
-/// window.
+/// `hovered` set the state it draws instead, and `preview` makes it inert, so
+/// that it can be shown in any window.
 #[derive(IntoElement)]
 pub struct WindowsWindowButtons {
     id: ElementId,
     maximized: Option<bool>,
     hovered: Option<WindowButton>,
+    preview: bool,
 }
 
 impl WindowsWindowButtons {
@@ -464,7 +506,15 @@ impl WindowsWindowButtons {
             id: id.into(),
             maximized: None,
             hovered: None,
+            preview: false,
         }
+    }
+
+    /// Only shows the buttons, as a gallery does: they are no control area of
+    /// the window, and a click logs nothing. They still draw the hover.
+    pub fn preview(mut self) -> Self {
+        self.preview = true;
+        self
     }
 
     /// Draws restore in place of maximize when `true`.
@@ -483,7 +533,8 @@ impl WindowsWindowButtons {
 impl RenderOnce for WindowsWindowButtons {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let maximized = self.maximized.unwrap_or_else(|| window.is_maximized());
-        tracing::trace!(maximized, "rendering windows caption buttons");
+        let preview = self.preview;
+        tracing::trace!(maximized, preview, "rendering windows caption buttons");
         let colors = cx.theme().colors();
         let close_red: Hsla = Rgba {
             r: 232.0 / 255.0,
@@ -532,12 +583,20 @@ impl RenderOnce for WindowsWindowButtons {
                     style
                         .hover(|style| style.bg(hover_bg).text_color(hover_fg))
                         .active(|style| style.bg(active_bg).text_color(active_fg))
-                        // Windows still sends the press and the release
-                        // here, and acts after them unless an element stops
-                        // them, so this only logs.
-                        .on_click(move |_, _, _| kind.action().leave_to_system())
                 })
-                .window_control_area(kind.control_area())
+                .when(enabled && !preview, |style| {
+                    // Windows still sends the press and the release here,
+                    // and acts after them unless an element stops them, so
+                    // this only logs.
+                    style.on_click(move |event, _, _| {
+                        if windows_acts_on(event) {
+                            kind.action().leave_to_system();
+                        }
+                    })
+                })
+                .when_some(caption_control_area(kind, preview), |style, area| {
+                    style.window_control_area(area)
+                })
                 .child(kind.glyph())
         });
 

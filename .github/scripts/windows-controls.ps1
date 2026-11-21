@@ -61,7 +61,6 @@ Say "window $h dpi $([W]::GetDpiForWindow($h))"
 [W]::SetForegroundWindow($h) | Out-Null
 Start-Sleep 2
 Say "start: $(State $h)"
-$bb = Buttons $h; Say "close at $($bb.close -join ','), max at $($bb.max -join ','), min at $($bb.min -join ',')"
 Shot "controls-normal.png"
 
 # The buttons sit at the bar's right end: 36 px each, the bar 32 px high, at scale 1.
@@ -70,8 +69,11 @@ function Buttons($h) {
   $c = New-Object W+RECT; [W]::GetClientRect($h, [ref]$c) | Out-Null
   $o = New-Object W+POINT; [W]::ClientToScreen($h, [ref]$o) | Out-Null
   $right = $o.X + $c.R; $y = $o.Y + [int](16 * $scale)
-  @{ close = @($right - [int](18 * $scale), $y); max = @($right - [int](54 * $scale), $y); min = @($right - [int](90 * $scale), $y); bar = @($o.X + [int](300 * $scale), $y) }
+  $closeX = $right - [int](18 * $scale); $maxX = $right - [int](54 * $scale); $minX = $right - [int](90 * $scale); $barX = $o.X + [int](300 * $scale)
+  @{ close = @($closeX, $y); max = @($maxX, $y); min = @($minX, $y); bar = @($barX, $y) }
 }
+
+$bb = Buttons $h; Say "close at $($bb.close -join ','), max at $($bb.max -join ','), min at $($bb.min -join ',')"
 
 # Hover over close, for a screenshot of the red hover.
 $b = Buttons $h; [W]::SetCursorPos($b.close[0], $b.close[1]) | Out-Null; Start-Sleep 1; Shot "controls-hover-close.png"

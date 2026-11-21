@@ -1,8 +1,8 @@
 // Alone in this binary: captures tracing output, which would race with any
 // other test reaching the same log lines.
 use gpui::{
-    Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement, PlatformInput, ResizeEdge,
-    Styled, TestAppContext, point, px,
+    Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement, Pixels, PlatformInput,
+    Point, ResizeEdge, Styled, TestAppContext, point, px,
 };
 use std::{
     collections::BTreeMap,
@@ -31,6 +31,12 @@ impl gpui::Render for Page {
                         .w(px(200.))
                         .justify_end()
                         .child(WindowsWindowButtons::new("windows-buttons")),
+                )
+                .child(
+                    h_flex()
+                        .w(px(200.))
+                        .justify_end()
+                        .child(WindowsWindowButtons::new("preview-buttons").preview()),
                 ),
             window,
             cx,
@@ -151,7 +157,12 @@ fn a_draw_traces_and_each_action_logs_in_its_group(cx: &mut TestAppContext) {
     );
     assert!(
         lines.iter().any(|line| line
-            == "none: TRACE yard_ui::window_controls message=rendering windows caption buttons maximized=false"),
+            == "none: TRACE yard_ui::window_controls message=rendering windows caption buttons maximized=false preview=false"),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line
+            == "none: TRACE yard_ui::window_controls message=rendering windows caption buttons maximized=false preview=true"),
         "{lines:?}"
     );
     assert!(
@@ -266,6 +277,58 @@ fn a_draw_traces_and_each_action_logs_in_its_group(cx: &mut TestAppContext) {
             lines.iter().any(|line| line
                 == &format!("{group}: DEBUG yard_ui::window_controls message=left to the system")),
             "{action}: {lines:?}"
+        );
+    }
+
+    // Windows acts only on a left release over a caption button, so a
+    // right click logs nothing, even one that ends a left press on close;
+    // and a preview, 32 px lower, logs nothing at all.
+    let close = point(px(182.), px(36.));
+    let preview_close = point(px(182.), px(68.));
+    let sequences: [&[(MouseButton, bool, Point<Pixels>)]; 3] = [
+        &[
+            (MouseButton::Right, true, close),
+            (MouseButton::Right, false, close),
+        ],
+        &[
+            (MouseButton::Left, true, close),
+            (MouseButton::Right, true, close),
+            (MouseButton::Right, false, close),
+            (MouseButton::Left, false, close),
+        ],
+        &[
+            (MouseButton::Left, true, preview_close),
+            (MouseButton::Left, false, preview_close),
+        ],
+    ];
+    for sequence in sequences {
+        tracing::subscriber::with_default(trace.clone(), || {
+            cx.update(|window, cx| {
+                for &(button, down, position) in sequence {
+                    let input = if down {
+                        PlatformInput::MouseDown(MouseDownEvent {
+                            button,
+                            position,
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                            first_mouse: false,
+                        })
+                    } else {
+                        PlatformInput::MouseUp(MouseUpEvent {
+                            button,
+                            position,
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                        })
+                    };
+                    window.dispatch_event(input, cx);
+                }
+            })
+        });
+        let (spans, lines) = take_lines(&trace);
+        assert!(
+            !spans.iter().any(|span| span.contains("window-control")),
+            "{sequence:?}: {spans:?} {lines:?}"
         );
     }
 

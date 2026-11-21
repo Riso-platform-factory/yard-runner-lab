@@ -100,15 +100,20 @@ impl Render for WindowControlsPage {
                     .gap(rems(0.5))
                     .child(row(
                         "Normal",
-                        WindowsWindowButtons::new("windows-normal").maximized(false),
+                        WindowsWindowButtons::new("windows-normal")
+                            .preview()
+                            .maximized(false),
                     ))
                     .child(row(
                         "Maximized",
-                        WindowsWindowButtons::new("windows-maximized").maximized(true),
+                        WindowsWindowButtons::new("windows-maximized")
+                            .preview()
+                            .maximized(true),
                     ))
                     .child(row(
                         "Hover close",
                         WindowsWindowButtons::new("windows-hover-close")
+                            .preview()
                             .maximized(false)
                             .hovered(WindowButton::Close),
                     )),
