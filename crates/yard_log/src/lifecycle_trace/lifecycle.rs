@@ -239,7 +239,12 @@ where
         }
         let error = *metadata.level() == tracing::Level::ERROR;
         let known = if error {
-            known_errors::find(self.0.known, metadata.target(), &visitor.message)
+            known_errors::find(
+                self.0.known,
+                metadata.target(),
+                metadata.line(),
+                &visitor.message,
+            )
         } else {
             None
         };
@@ -339,13 +344,24 @@ mod tests {
     use super::*;
     use tracing_subscriber::{Registry, prelude::*};
 
-    const TEST_KNOWN: &[KnownError] = &[KnownError {
-        slug: "test-known",
-        target: "known_target",
-        message_contains: &["known problem"],
-        reason: "Test error",
-        tracking: None,
-    }];
+    const TEST_KNOWN: &[KnownError] = &[
+        KnownError {
+            slug: "test-known",
+            target: "known_target",
+            message_contains: &["known problem"],
+            lines: None,
+            reason: "Test error",
+            tracking: None,
+        },
+        KnownError {
+            slug: "test-known-at-lines",
+            target: "located_target",
+            message_contains: &["located problem"],
+            lines: Some((40, 42)),
+            reason: "Test error logged from one place",
+            tracking: None,
+        },
+    ];
 
     fn capture(f: impl FnOnce(&Lifecycle)) -> Vec<Record> {
         let (tx, rx) = mpsc::channel();
@@ -570,6 +586,35 @@ mod tests {
         );
         assert!(records.iter().any(|record| matches!(record,
             Record::Line { known: Some(slug), .. } if slug == "test-known")));
+    }
+
+    #[test]
+    fn a_known_error_with_lines_matches_a_log_record_only_from_those_lines() {
+        let records = capture(|_| {
+            for line in [41, 302] {
+                tracing_log::format_trace(
+                    &log::Record::builder()
+                        .level(log::Level::Error)
+                        .target("located_target")
+                        .file(Some("crates/located/src/platform.rs"))
+                        .line(Some(line))
+                        .args(format_args!("located problem at {line}"))
+                        .build(),
+                )
+                .unwrap();
+            }
+        });
+        let known = |wanted: &str| {
+            records.iter().find_map(|record| match record {
+                Record::Line { message, known, .. } if message == wanted => Some(known.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            known("located problem at 41"),
+            Some(Some("test-known-at-lines".into()))
+        );
+        assert_eq!(known("located problem at 302"), Some(None));
     }
 
     #[test]

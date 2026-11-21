@@ -150,7 +150,11 @@ These change engines that are in production today. Each change goes to the user 
     - double-click maximizes, right-click opens the window menu, dragging the bar moves, and the edges resize;
     - a shadow, and rounded corners when not tiled, over a transparent window background.
   - **When GPUI falls back to the system frame.** On X11, GPUI draws them only when a compositing window manager supports `_GTK_FRAME_EXTENTS` (as GNOME, KDE, and Xfce do); otherwise the window manager's own frame is used. On Wayland they are always drawn.
-  - **Windows.** The three caption buttons are drawn with Segoe Fluent Icons, and GPUI's `WindowControlArea` hit-testing does the rest.
+  - **Windows.** As Zed's `platform_windows`:
+    - **The buttons.** Minimize, maximize or restore, and close are drawn on the right of the title bar. They are 36 px wide, in a 32 px bar. The icons are Segoe Fluent Icons on Windows 11 (build 22000 and later), and Segoe MDL2 Assets before that. Close turns red on hover.
+    - **Windows does the actions.** Each button and the bar are marked with GPUI's `WindowControlArea`, so Windows itself minimizes, maximizes, closes, moves the window when the bar is dragged, and maximizes on a double-click. Snap layouts show on the maximize button. The edges resize. YARD only logs each button's left click as `window-control{action}`, with "left to the system". It never stops the event, since that would keep Windows from acting.
+    - **No system menu on right-click.** GPUI does not open it on a drawn title bar, and Zed has none either.
+  - **Closing a window.** Every YARD window answers the system's close request itself, as Zed does. A `window-close-request` group logs the request, and the window is removed once nothing reads it any more. On Windows, letting the system close it directly destroyed the window while GPUI still used it.
   - **The GPL boundary.** What is copied from Zed's GPL crates (`platform_title_bar`, `workspace`) stays inside `yard_ui`, with its notices, as the GPL boundary requires.
 - **Window options.**
   - `app_id` is the identifier, so Wayland and X11 match the window to its `.desktop` file.

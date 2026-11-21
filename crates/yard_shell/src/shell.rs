@@ -7086,8 +7086,15 @@ fn create_shell(window: &mut Window, cx: &mut App, saved: Option<&SessionWindow>
         window
             .spawn(cx, async move |cx| {
                 let _group = group.enter();
-                tracing::debug!("removing the window");
-                cx.update(|window, _| window.remove_window()).ok();
+                // A request queued before an earlier one removed the window,
+                // or the Linux close button did, finds it gone.
+                let removed = cx.update(|window, _| {
+                    tracing::debug!("removing the window");
+                    window.remove_window();
+                });
+                if removed.is_err() {
+                    tracing::debug!("already closed");
+                }
             })
             .detach();
         false

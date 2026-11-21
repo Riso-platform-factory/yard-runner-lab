@@ -85,7 +85,7 @@ impl tracing::Subscriber for Trace {
 // window may close. The shell answers no and removes the window itself, as
 // Zed does, so that GPUI destroys the platform window only once it is gone.
 #[gpui::test]
-fn a_close_request_removes_the_window_in_its_group(cx: &mut TestAppContext) {
+fn close_requests_remove_the_window_once_in_their_groups(cx: &mut TestAppContext) {
     cx.update(yard_ui::init);
     let window = cx.update(|cx| {
         cx.open_window(gpui::WindowOptions::default(), yard_shell::new_shell)
@@ -95,14 +95,18 @@ fn a_close_request_removes_the_window_in_its_group(cx: &mut TestAppContext) {
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
     let trace = Trace::default();
 
+    // Two requests before the first is handled, as two native close
+    // messages give: the first removes the window, the second finds it gone.
     let closed_by_the_platform = tracing::subscriber::with_default(trace.clone(), || {
-        let answer = visual.simulate_close();
+        let first = visual.simulate_close();
+        let second = visual.simulate_close();
         visual.run_until_parked();
-        answer
+        (first, second)
     });
 
-    assert!(
-        !closed_by_the_platform,
+    assert_eq!(
+        closed_by_the_platform,
+        (false, false),
         "the platform must not close the window itself"
     );
     assert!(
@@ -121,6 +125,25 @@ fn a_close_request_removes_the_window_in_its_group(cx: &mut TestAppContext) {
         .position(|line| line == &format!("{group}: DEBUG message=removing the window"));
     assert!(
         matches!((request, removal), (Some(request), Some(removal)) if request < removal),
+        "{:?}",
+        captured.lines
+    );
+    let count = |message: &str| {
+        captured
+            .lines
+            .iter()
+            .filter(|line| *line == &format!("{group}: DEBUG message={message}"))
+            .count()
+    };
+    assert_eq!(count("close requested"), 2, "{:?}", captured.lines);
+    assert_eq!(count("removing the window"), 1, "{:?}", captured.lines);
+    assert_eq!(count("already closed"), 1, "{:?}", captured.lines);
+    let closed = captured
+        .lines
+        .iter()
+        .position(|line| line == &format!("{group}: DEBUG message=already closed"));
+    assert!(
+        matches!((removal, closed), (Some(removal), Some(closed)) if removal < closed),
         "{:?}",
         captured.lines
     );

@@ -3,6 +3,7 @@ pub(crate) const UNDER_REVIEW: &[&str] = &[
     "yard_ui/window_controls",
     "yard_ui/title_bar",
     "yard_shell/shell",
+    "yard_log/lifecycle_trace",
 ];
 
 pub fn run() -> bool {
