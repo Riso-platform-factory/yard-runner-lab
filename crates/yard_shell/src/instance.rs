@@ -1101,12 +1101,13 @@ mod windows {
     }
 
     impl Tries {
-        /// Counts one more try, and logs its reason when it first comes, or
-        /// comes back after another, not on every try.
+        /// Counts one more try, logged at `trace`, and logs its reason at
+        /// `debug` too when it first comes, or comes back after another.
         fn again(&mut self, reason: &'static str) {
             self.count += 1;
+            tracing::trace!(tries = self.count, "{reason}");
             if self.last != Some(reason) {
-                tracing::debug!("{reason}");
+                tracing::debug!(tries = self.count, "{reason}");
                 self.last = Some(reason);
             }
         }

@@ -1,6 +1,7 @@
 //! One test: a start that ends with `yard_log::exit` writes the whole run
-//! to stderr, `run-end` last, on every system. It runs itself again as a
-//! child process, which installs the process-wide logger and exits.
+//! to stderr, its open group ended as interrupted and one `run-end` last,
+//! on every system. It runs itself again as a child process, which
+//! installs the process-wide logger and exits.
 
 use std::process::Command;
 
@@ -38,4 +39,16 @@ fn exit_ends_the_run_before_the_process_exits() {
         .rfind(|line| !line.trim().is_empty())
         .unwrap();
     assert!(last.contains("run-end"), "{stderr}");
+    let run_ends = stderr
+        .lines()
+        .filter(|line| line.contains("run-end"))
+        .count();
+    assert_eq!(run_ends, 1, "{stderr}");
+    // The group still open when the process exits ends as interrupted.
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.contains("⊘ [") && line.contains("hand-over]")),
+        "{stderr}"
+    );
 }
