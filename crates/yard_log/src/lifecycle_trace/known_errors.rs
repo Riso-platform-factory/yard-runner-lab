@@ -23,16 +23,24 @@ pub(crate) struct KnownError {
     pub tracking: Option<&'static str>,
 }
 
-// TODO(gpui-key-status-after-close): This entry tolerates GPUI callbacks for an already closed window. Remove it when GPUI is bumped to a revision with the upstream key-status fix.
+// TODO(gpui-active-status-after-close): This entry tolerates GPUI's active-status callback for an already closed window, on macOS and on Windows. Remove it when GPUI is bumped to a revision that drops the callback with the window.
 pub(crate) const KNOWN_ERRORS: &[KnownError] = &[
     KnownError {
-        slug: "gpui-macos-key-status-after-close",
+        slug: "gpui-active-status-after-close",
         target: "gpui::window",
         message_contains: &[
             "handling active status change for window",
             "window not found",
         ],
-        reason: "gpui_macos's close_window runs GPUI's close callback, which removes the window, before calling [super close]. AppKit then sends windowDidResignKey, and window_did_change_key_status runs the activate callback for the removed window. Fixed upstream by returning early from window_did_change_key_status when the window state's `closed` flag is set.",
+        reason: "The platform reports that a window stopped being active after GPUI has removed it, and the callback GPUI registered (gpui/src/window.rs:2181-2207) finds no window. On macOS, gpui_macos's close_window (gpui_macos/src/window.rs:3317) runs GPUI's close callback, which removes the window, before calling [super close]; AppKit then sends windowDidResignKey, and window_did_change_key_status (gpui_macos/src/window.rs:3217) runs the callback. On Windows, GPUI drops the platform window once it has removed it, and Drop for WindowsWindow (gpui_windows/src/window.rs:613-634) hides the window and destroys it but drops only the visibility callback; the WM_ACTIVATE that the hide sends reaches handle_activate_msg (gpui_windows/src/events.rs:798-845), which runs the active-status callback in a task, after the window is gone. Zed closes its windows the same way and gets the same line. Fixed upstream by dropping the active-status callback with the window, or by skipping it for a closed window.",
+        tracking: None,
+    },
+    // TODO(gpui-windows-redraw-after-destroy): This entry tolerates GPUI's vsync thread redrawing a window that was just destroyed. Remove it when gpui_windows stops tracking a window once it destroys it.
+    KnownError {
+        slug: "gpui-windows-redraw-after-destroy",
+        target: "gpui_windows::platform",
+        message_contains: &["Invalid window handle.", "0x80070578"],
+        reason: "gpui_windows's vsync thread calls RedrawWindow on every window in raw_window_handles (gpui_windows/src/platform.rs:463-481). Drop for WindowsWindow destroys the window in a task (gpui_windows/src/window.rs:620-633); its WM_DESTROY handler only posts WM_GPUI_CLOSE_ONE_WINDOW (gpui_windows/src/events.rs:325-348), and the window leaves raw_window_handles when the main thread handles that message (gpui_windows/src/platform.rs:1238-1240 and 1292-1303). A vsync tick in between redraws a destroyed window, and RedrawWindow fails with ERROR_INVALID_WINDOW_HANDLE. The list is GPUI's own, so no application can close the gap; Zed has the same race. Fixed upstream by removing the window from raw_window_handles before destroying it.",
         tracking: None,
     },
     // TODO(wgpu-gl-probe-without-drm): This entry tolerates EGL failing to start where there is no DRM device. Remove it when gpui_wgpu stops asking wgpu for the GL backend whenever Vulkan is available, or lets the application choose the backends.
@@ -79,7 +87,7 @@ mod tests {
         let message = "handling active status change for window WindowId(1v1): window not found";
         assert_eq!(
             find(KNOWN_ERRORS, "gpui::window", message).unwrap().slug,
-            "gpui-macos-key-status-after-close"
+            "gpui-active-status-after-close"
         );
         assert!(find(KNOWN_ERRORS, "other", message).is_none());
         for message in [
@@ -87,6 +95,25 @@ mod tests {
             "window not found",
         ] {
             assert!(find(KNOWN_ERRORS, "gpui::window", message).is_none());
+        }
+    }
+
+    #[test]
+    fn matches_a_redraw_of_a_destroyed_window_in_gpui_windows_s_platform_only() {
+        let target = "gpui_windows::platform";
+        let message = "Invalid window handle. (0x80070578)";
+        assert_eq!(
+            find(KNOWN_ERRORS, target, message).unwrap().slug,
+            "gpui-windows-redraw-after-destroy"
+        );
+        // The same failure elsewhere in gpui_windows is not this race.
+        assert!(find(KNOWN_ERRORS, "gpui_windows::window", message).is_none());
+        for message in [
+            "Invalid window handle (0x80040102)",
+            "Access is denied. (0x80070005)",
+            "Invalid window handle.",
+        ] {
+            assert!(find(KNOWN_ERRORS, target, message).is_none(), "{message}");
         }
     }
 

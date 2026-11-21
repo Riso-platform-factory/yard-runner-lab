@@ -124,6 +124,9 @@ Say "probe window ${gh}: $(State $gh)"
 $c = New-Object W+RECT; [W]::GetClientRect($gh, [ref]$c) | Out-Null
 $o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
 $before = State $gh; [W]::Drag($o.X + 300, $o.Y + 16, 120, 60); Start-Sleep 2; Say "gpui probe drag bar: before [$before] after [$(State $gh)]"
+$o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
+[W]::RightClick($o.X + 300, $o.Y + 16); Start-Sleep 2; Shot "control-gpui-menu.png"; Say "gpui probe right-click: screenshot control-gpui-menu.png"
+[System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep 1
 $gx = $o.X + 300; $gy = $o.Y + 16
 $o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
 [W]::Click($o.X + 300, $o.Y + 16); Start-Sleep -Milliseconds 80; [W]::Click($o.X + 300, $o.Y + 16); Start-Sleep 2; Say "gpui probe double-click: $(State $gh)"
