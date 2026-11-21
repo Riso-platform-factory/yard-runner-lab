@@ -64,12 +64,12 @@
   "yard_log/lifecycle_trace": {
     "files": {
       "crates/yard_log/src/lifecycle_trace.rs": "b4c19d1735171ed0",
-      "crates/yard_log/src/lifecycle_trace/known_errors.rs": "700691540851003e",
-      "crates/yard_log/src/lifecycle_trace/lifecycle.rs": "34ed85f497f06ca7",
+      "crates/yard_log/src/lifecycle_trace/known_errors.rs": "33a599528e10910a",
+      "crates/yard_log/src/lifecycle_trace/lifecycle.rs": "f2f7ca134317ff88",
       "crates/yard_log/src/lifecycle_trace/record.rs": "ea754fdee914644c",
       "crates/yard_log/src/lifecycle_trace/writer.rs": "436e091b6110dd08"
     },
-    "promoted": "2026-11-20"
+    "promoted": "2026-11-21"
   },
   "yard_paths/directories": {
     "files": {
@@ -187,7 +187,7 @@
   },
   "yard_shell/shell": {
     "files": {
-      "crates/yard_shell/src/shell.rs": "6a9d9e887dfcdcba"
+      "crates/yard_shell/src/shell.rs": "50a501d90a1de97d"
     },
     "promoted": "2026-11-21"
   },
@@ -328,9 +328,9 @@
   },
   "yard_ui/title_bar": {
     "files": {
-      "crates/yard_ui/src/title_bar.rs": "4d6d9459bb63375e"
+      "crates/yard_ui/src/title_bar.rs": "ae4e9009d9a8b654"
     },
-    "promoted": "2026-11-20"
+    "promoted": "2026-11-21"
   },
   "yard_ui/toast_layer": {
     "files": {
@@ -352,9 +352,9 @@
   },
   "yard_ui/window_controls": {
     "files": {
-      "crates/yard_ui/src/window_controls.rs": "3744bc1749349491"
+      "crates/yard_ui/src/window_controls.rs": "175c898aafc4293c"
     },
-    "promoted": "2026-11-20"
+    "promoted": "2026-11-21"
   },
   "yard_update/check": {
     "files": {
