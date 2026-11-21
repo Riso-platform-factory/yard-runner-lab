@@ -70,7 +70,10 @@ pub fn config_in(
 /// A command as the runner was given it.
 #[derive(Debug, Clone)]
 pub struct Recorded {
+    /// The program's file name without `.exe`.
     pub program: String,
+    /// The program as it was given, a full path when it is one.
+    pub path: PathBuf,
     pub args: Vec<String>,
     /// Set variables with their value, removed ones with `None`.
     pub envs: Vec<(String, Option<String>)>,
@@ -88,6 +91,9 @@ pub type Hook = Box<dyn FnMut(&Path)>;
 /// What runs as a command starts.
 pub type CommandHook = Box<dyn FnMut(&Recorded)>;
 
+/// The banner the fake `ISCC.exe /?` prints, as Inno Setup 6.4.3 does.
+pub const ISCC_BANNER: &str = "Inno Setup 6.4.3 Command-Line Compiler\r\nCopyright (C) 1997-2025 Jordan Russell. All rights reserved.\r\n";
+
 /// The search list the fake `security list-keychains` prints.
 pub const LOGIN_KEYCHAIN: &str = "/Users/test/Library/Keychains/login.keychain-db";
 
@@ -99,7 +105,7 @@ pub const LOGIN_KEYCHAIN: &str = "/Users/test/Library/Keychains/login.keychain-d
 /// `create-keychain` writes the keychain's file as `<path>-db`,
 /// `delete-keychain` takes the keychain out of `search_list`, and
 /// `notarytool submit` reports `notarization` and fails unless it is
-/// `Accepted`.
+/// `Accepted`, and `ISCC.exe /?` prints `iscc_banner`.
 /// `on_command` sees every command as it starts. `fail` and `also_fail` make
 /// a program, or a program and its first argument (such as `security
 /// delete-keychain`), fail, after `on_fail` runs; `on_verify` runs on the
@@ -114,6 +120,11 @@ pub struct FakeRunner {
     /// What runs as each command starts.
     pub on_command: Option<CommandHook>,
     pub on_verify: Option<Hook>,
+    /// What `ISCC.exe /?` prints.
+    pub iscc_banner: &'static str,
+    /// Whether `certutil` prints the digest in pairs separated by spaces,
+    /// as older Windows does.
+    pub certutil_spaced: bool,
     /// The status `notarytool submit` reports.
     pub notarization: &'static str,
     /// The notarization key's file as `notarytool submit` found it.
@@ -140,6 +151,8 @@ impl FakeRunner {
             on_fail: None,
             on_command: None,
             on_verify: None,
+            iscc_banner: ISCC_BANNER,
+            certutil_spaced: false,
             notarization: "Accepted",
             key_seen: None,
             certificate_seen: None,
@@ -167,6 +180,7 @@ impl FakeRunner {
                     None => name,
                 }
             },
+            path: PathBuf::from(command.get_program()),
             args: command
                 .get_args()
                 .map(|arg| arg.to_string_lossy().into_owned())
@@ -280,6 +294,11 @@ impl xtask::Runner for FakeRunner {
 
     fn report(&mut self, command: &mut Command) -> Result<(bool, Vec<u8>), String> {
         let recorded = self.record(command, None)?;
+        if recorded.program == "ISCC" {
+            assert_eq!(recorded.args, ["/?"]);
+            // ISCC ends `/?` with a code that says nothing of the version.
+            return Ok((false, self.iscc_banner.as_bytes().to_vec()));
+        }
         assert_eq!(recorded.args[..2], ["notarytool", "submit"]);
         let key = recorded.args.iter().position(|arg| arg == "--key").unwrap();
         self.key_seen = Some(std::fs::read(&recorded.args[key + 1]).unwrap());
@@ -307,11 +326,23 @@ impl xtask::Runner for FakeRunner {
                 .collect::<String>()
                 .into_bytes(),
             "shasum" | "sha256sum" => format!("{DIGEST}  {}\n", recorded.args.last().unwrap()).into_bytes(),
-            "certutil" => format!(
-                "SHA256 hash of {}:\n{DIGEST}\nCertUtil: -hashfile command completed successfully.\n",
-                recorded.args[1]
-            )
-            .into_bytes(),
+            "certutil" => {
+                let digest = if self.certutil_spaced {
+                    DIGEST
+                        .as_bytes()
+                        .chunks(2)
+                        .map(|pair| std::str::from_utf8(pair).unwrap().to_uppercase())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    DIGEST.to_owned()
+                };
+                format!(
+                    "SHA256 hash of {}:\r\n{digest}\r\nCertUtil: -hashfile command completed successfully.\r\n",
+                    recorded.args[1]
+                )
+                .into_bytes()
+            }
             "cargo" | "cargo.exe" => format!(
                 "{}\n{}\n{}\n",
                 serde_json::json!({"reason": "compiler-artifact", "target": {"name": "yard_log"}, "executable": null}),

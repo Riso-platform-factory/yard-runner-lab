@@ -23,15 +23,30 @@ fn options(config: &Path, out: &Path) -> WindowsArgs {
 }
 
 /// A Windows host whose `PATH` is a folder of `temp` holding a fake
-/// `ISCC.exe`.
+/// `ISCC.exe`, and whose `%SystemRoot%` is a folder of `temp` holding fake
+/// `System32\tar.exe` and `System32\certutil.exe`.
 fn host(temp: &Path) -> WindowsHost {
     let inno = temp.join("inno");
     std::fs::create_dir_all(&inno).unwrap();
     std::fs::write(inno.join("ISCC.exe"), b"").unwrap();
+    let root = temp.join("Windows");
+    std::fs::create_dir_all(root.join("System32")).unwrap();
+    for tool in ["tar.exe", "certutil.exe"] {
+        std::fs::write(root.join("System32").join(tool), b"").unwrap();
+    }
     WindowsHost {
         system: "windows".into(),
         path: Some(inno.into_os_string()),
-        ..WindowsHost::default()
+        program_files_x86: None,
+        system_root: Some(root.into_os_string()),
+    }
+}
+
+/// The fake tools of [`host`].
+fn tool(temp: &Path, name: &str) -> PathBuf {
+    match name {
+        "ISCC" => temp.join("inno").join("ISCC.exe"),
+        name => temp.join("Windows/System32").join(format!("{name}.exe")),
     }
 }
 
@@ -92,14 +107,20 @@ fn watch_staging(runner: &mut FakeRunner, name: &str) -> Arc<Mutex<Staged>> {
     let seen = staged.clone();
     let name = name.to_owned();
     runner.on_command = Some(Box::new(move |command| {
-        if command.program == "ISCC" {
+        if command.program == "ISCC" && command.args[0] == "/Q" {
             let script = PathBuf::from(command.args.last().unwrap());
             let folder = script.parent().unwrap();
             *seen.lock().unwrap() = Staged {
                 files: files(folder),
                 iss: std::fs::read_to_string(&script).unwrap(),
                 ico: std::fs::read(folder.join(format!("{name}.ico"))).unwrap(),
-                exe: std::fs::read(folder.join(&name).join(format!("{name}.exe"))).unwrap(),
+                exe: std::fs::read(
+                    folder
+                        .join("payload")
+                        .join(&name)
+                        .join(format!("{name}.exe")),
+                )
+                .unwrap(),
                 script,
             };
         }
@@ -154,23 +175,40 @@ fn expected_lines(
         "SolidCompression=yes".to_owned(),
         "WizardStyle=modern".to_owned(),
         "[Files]".to_owned(),
-        format!("Source: \"{name}\\{name}.exe\"; DestDir: \"{{app}}\"; Flags: ignoreversion"),
+        format!(
+            "Source: \"payload\\{name}\\{name}.exe\"; DestDir: \"{{app}}\"; Flags: ignoreversion"
+        ),
         "[Icons]".to_owned(),
         format!(
             "Name: \"{{userprograms}}\\{name}\"; Filename: \"{{app}}\\{name}.exe\"; AppUserModelID: \"{identifier}\"{parameters}"
         ),
         "[Registry]".to_owned(),
         format!(
-            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\"; ValueType: string; ValueName: \"\"; ValueData: \"URL:{name}\"; Flags: uninsdeletekey"
+            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\"; ValueType: none; Flags: uninsdeletekeyifempty"
         ),
         format!(
-            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\"; ValueType: string; ValueName: \"URL Protocol\"; ValueData: \"\""
+            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\"; ValueType: string; ValueName: \"\"; ValueData: \"URL:{name}\"; Flags: uninsdeletevalue"
         ),
         format!(
-            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\\DefaultIcon\"; ValueType: string; ValueName: \"\"; ValueData: \"\"\"{{app}}\\{name}.exe\"\",0\""
+            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\"; ValueType: string; ValueName: \"URL Protocol\"; ValueData: \"\"; Flags: uninsdeletevalue"
         ),
         format!(
-            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\\shell\\open\\command\"; ValueType: string; ValueName: \"\"; ValueData: \"\"\"{{app}}\\{name}.exe\"\" {argument}\"\"%1\"\"\""
+            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\\DefaultIcon\"; ValueType: none; Flags: uninsdeletekeyifempty"
+        ),
+        format!(
+            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\\DefaultIcon\"; ValueType: string; ValueName: \"\"; ValueData: \"\"\"{{app}}\\{name}.exe\"\",0\"; Flags: uninsdeletevalue"
+        ),
+        format!(
+            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\\shell\"; ValueType: none; Flags: uninsdeletekeyifempty"
+        ),
+        format!(
+            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\\shell\\open\"; ValueType: none; Flags: uninsdeletekeyifempty"
+        ),
+        format!(
+            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\\shell\\open\\command\"; ValueType: none; Flags: uninsdeletekeyifempty"
+        ),
+        format!(
+            "Root: HKCU; Subkey: \"Software\\Classes\\{scheme}\\shell\\open\\command\"; ValueType: string; ValueName: \"\"; ValueData: \"\"\"{{app}}\\{name}.exe\"\" {argument}\"\"%1\"\"\"; Flags: uninsdeletevalue"
         ),
         "[Run]".to_owned(),
         format!(
@@ -254,7 +292,7 @@ fn each_config_lays_out_its_installer_and_zip() {
             sorted(vec![
                 format!("{name}.ico"),
                 format!("{name}.iss"),
-                format!("{name}/{name}.exe"),
+                format!("payload/{name}/{name}.exe"),
             ]),
             "{folder}: the staged files"
         );
@@ -283,12 +321,32 @@ fn each_config_lays_out_its_installer_and_zip() {
 
         assert_eq!(
             runner.programs(),
-            ["cargo", "cargo", "ISCC", "certutil", "tar", "certutil"],
+            [
+                "ISCC", "cargo", "cargo", "ISCC", "certutil", "tar", "certutil"
+            ],
             "{folder}: the commands in order"
         );
-        let stages = &runner.commands[0];
+        assert_eq!(
+            runner.commands[0].args,
+            ["/?"],
+            "{folder}: the version first"
+        );
+        for (index, name) in [
+            (0, "ISCC"),
+            (3, "ISCC"),
+            (4, "certutil"),
+            (5, "tar"),
+            (6, "certutil"),
+        ] {
+            assert_eq!(
+                runner.commands[index].path,
+                tool(temp.path(), name),
+                "{folder}: {name} by its full path"
+            );
+        }
+        let stages = &runner.commands[1];
         assert_eq!(stages.args, ["test", "-p", "yard", "--test", "stages"]);
-        let build = &runner.commands[1];
+        let build = &runner.commands[2];
         assert_eq!(
             build.args,
             [
@@ -316,7 +374,7 @@ fn each_config_lays_out_its_installer_and_zip() {
             "{folder}: no secret reaches cargo"
         );
 
-        let iscc = &runner.commands[2];
+        let iscc = &runner.commands[3];
         let staging = staged.script.parent().unwrap();
         assert_eq!(
             iscc.args,
@@ -329,14 +387,14 @@ fn each_config_lays_out_its_installer_and_zip() {
             "{folder}: staged inside out"
         );
         assert_eq!(
-            runner.commands[3].args,
+            runner.commands[4].args,
             [
                 "-hashfile".to_owned(),
                 staging.join(&setup).display().to_string(),
                 "SHA256".to_owned()
             ]
         );
-        let tar = &runner.commands[4];
+        let tar = &runner.commands[5];
         assert_eq!(
             tar.args,
             [
@@ -345,7 +403,7 @@ fn each_config_lays_out_its_installer_and_zip() {
                 "-f".to_owned(),
                 staging.join("release.zip").display().to_string(),
                 "-C".to_owned(),
-                staging.display().to_string(),
+                staging.join("payload").display().to_string(),
                 name.to_owned(),
             ],
             "{folder}: the zip holds <Name>/<Name>.exe"
@@ -376,7 +434,7 @@ fn a_dev_bundle_runs_dev_from_its_shortcut_and_its_url_command() {
         "{iss}"
     );
     assert!(
-        !runner.commands[1]
+        !runner.commands[2]
             .args
             .iter()
             .any(|arg| arg == "--no-default-features"),
@@ -385,37 +443,42 @@ fn a_dev_bundle_runs_dev_from_its_shortcut_and_its_url_command() {
 }
 
 #[test]
-fn braces_in_the_name_are_doubled_where_inno_reads_constants() {
+fn names_that_staging_uses_itself_do_not_collide() {
+    for name in ["release.zip", "previous-0", "payload", "unpublished-0"] {
+        let temp = tempdir();
+        let config = config_in(
+            temp.path(),
+            name,
+            "0.1.0",
+            "test.yard.collide",
+            "yardcollide",
+        );
+        let out = temp.path().join("out");
+        let mut runner = FakeRunner::new(temp.path());
+        let bundled = bundle(&options(&config, &out), temp.path(), &mut runner).unwrap();
+        assert!(bundled.installer.0.is_file(), "{name}");
+        assert!(bundled.zip.0.is_file(), "{name}");
+        assert_eq!(
+            entries(&out).len(),
+            2,
+            "{name}: the temporary folder is gone"
+        );
+    }
+}
+
+#[test]
+fn certutil_digests_in_spaced_pairs_are_read() {
     let temp = tempdir();
-    let config = config_in(
-        temp.path(),
-        "Lab {Notes}",
-        "0.1.0",
-        "test.yard.braces",
-        "yardbraces",
-    );
     let mut runner = FakeRunner::new(temp.path());
-    let staged = watch_staging(&mut runner, "Lab {Notes}");
-    bundle(
-        &options(&config, &temp.path().join("out")),
+    runner.certutil_spaced = true;
+    let bundled = bundle(
+        &options(&under_test("plain"), &temp.path().join("out")),
         temp.path(),
         &mut runner,
     )
     .unwrap();
-    let iss = staged.lock().unwrap().iss.clone();
-    let arch = std::env::consts::ARCH;
-    for line in [
-        "AppName=Lab {{Notes}".to_owned(),
-        "DefaultDirName={localappdata}\\Programs\\Lab {{Notes}".to_owned(),
-        "UninstallDisplayIcon={app}\\Lab {{Notes}.exe".to_owned(),
-        // Read when compiling, where Inno Setup reads no constants.
-        format!("OutputBaseFilename=Lab {{Notes}}-0.1.0-{arch}-setup"),
-        "SetupIconFile=Lab {Notes}.ico".to_owned(),
-        "Source: \"Lab {Notes}\\Lab {Notes}.exe\"; DestDir: \"{app}\"; Flags: ignoreversion"
-            .to_owned(),
-    ] {
-        assert!(iss.lines().any(|l| l == line), "{line:?} in:\n{iss}");
-    }
+    assert_eq!(bundled.installer.1, DIGEST);
+    assert_eq!(bundled.zip.1, DIGEST);
 }
 
 #[test]
@@ -447,7 +510,7 @@ fn inno_setup_is_found_in_program_files_when_not_on_path() {
         system: "windows".into(),
         path: Some(temp.path().join("empty").into_os_string()),
         program_files_x86: Some(program_files.into_os_string()),
-        system_root: Some("C:\\Windows".into()),
+        ..host(temp.path())
     };
     let mut runner = FakeRunner::new(temp.path());
     bundle_windows(
@@ -457,16 +520,102 @@ fn inno_setup_is_found_in_program_files_when_not_on_path() {
         &mut runner,
     )
     .unwrap();
-    assert_eq!(
-        runner.commands[2].program, "ISCC",
-        "{:?}",
-        runner.commands[2]
-    );
-    assert!(
-        runner.commands[4].program.ends_with("tar"),
-        "Windows' own tar.exe: {:?}",
-        runner.commands[4]
-    );
+    for index in [0, 3] {
+        assert_eq!(runner.commands[index].path, inno.join("ISCC.exe"));
+    }
+}
+
+#[test]
+fn inno_setup_on_path_comes_first() {
+    let temp = tempdir();
+    let program_files = temp.path().join("Program Files (x86)");
+    let inno = program_files.join("Inno Setup 6");
+    std::fs::create_dir_all(&inno).unwrap();
+    std::fs::write(inno.join("ISCC.exe"), b"").unwrap();
+    let host = WindowsHost {
+        program_files_x86: Some(program_files.into_os_string()),
+        ..host(temp.path())
+    };
+    let mut runner = FakeRunner::new(temp.path());
+    bundle_windows(
+        &options(&under_test("plain"), &temp.path().join("out")),
+        &host,
+        &Interrupt::default(),
+        &mut runner,
+    )
+    .unwrap();
+    assert_eq!(runner.commands[0].path, tool(temp.path(), "ISCC"));
+}
+
+#[test]
+fn an_old_or_unknown_inno_setup_is_refused_before_building() {
+    for (banner, reason) in [
+        ("Inno Setup 6.2.2 Command-Line Compiler\r\n", Some("6.2.2")),
+        ("Inno Setup 5.6.1 Command-Line Compiler\r\n", Some("5.6.1")),
+        ("Something else\r\n", None),
+    ] {
+        let temp = tempdir();
+        let mut runner = FakeRunner::new(temp.path());
+        runner.iscc_banner = banner;
+        let failure = bundle(
+            &options(&under_test("plain"), &temp.path().join("out")),
+            temp.path(),
+            &mut runner,
+        )
+        .unwrap_err();
+        let iscc = tool(temp.path(), "ISCC");
+        assert_eq!(failure.step, "tools");
+        assert_eq!(
+            failure.reason,
+            match reason {
+                Some(version) => format!(
+                    "Inno Setup {version} at {} is too old: bundle windows needs 6.3 or later",
+                    iscc.display()
+                ),
+                None => format!(
+                    "could not read Inno Setup's version from {} /?",
+                    iscc.display()
+                ),
+            }
+        );
+        assert!(failure.is_refusal());
+        assert_eq!(runner.programs(), ["ISCC"], "nothing was built");
+    }
+}
+
+#[test]
+fn windows_own_tools_are_required() {
+    for (missing, unset) in [("tar.exe", false), ("certutil.exe", false), ("", true)] {
+        let temp = tempdir();
+        let mut host = host(temp.path());
+        let system32 = temp.path().join("Windows/System32");
+        if unset {
+            host.system_root = None;
+        } else {
+            std::fs::remove_file(system32.join(missing)).unwrap();
+        }
+        let mut runner = FakeRunner::new(temp.path());
+        let failure = bundle_windows(
+            &options(&under_test("plain"), &temp.path().join("out")),
+            &host,
+            &Interrupt::default(),
+            &mut runner,
+        )
+        .unwrap_err();
+        assert_eq!(failure.step, "tools");
+        assert_eq!(
+            failure.reason,
+            if unset {
+                "%SystemRoot% is not set, so tar.exe cannot be found".to_owned()
+            } else {
+                format!(
+                    "Windows' {missing} was not found at {}",
+                    system32.join(missing).display()
+                )
+            }
+        );
+        assert_eq!(runner.programs(), ["ISCC"], "nothing was built");
+    }
 }
 
 #[test]
@@ -621,6 +770,10 @@ fn the_name_and_the_version_must_be_windows_file_names() {
         (" Lab", "0.1.0", "name"),
         ("con", "0.1.0", "name"),
         ("COM1.notes", "0.1.0", "name"),
+        ("COM¹", "0.1.0", "name"),
+        ("COM².txt", "0.1.0", "name"),
+        ("lpt³.txt", "0.1.0", "name"),
+        ("LPT9", "0.1.0", "name"),
         ("Lab", "0.1/0", "version"),
         ("Lab", "0.1*", "version"),
     ] {
@@ -637,11 +790,93 @@ fn the_name_and_the_version_must_be_windows_file_names() {
         assert_eq!(
             failure.reason,
             format!(
-                "{}: `{key}` must be a Windows file name: none of < > : \" / \\ | ? * or a control character, no space at either end, no dot at the end, and not a device name such as CON",
+                "{}: `{key}` must be a Windows file name: none of < > : \" / \\ | ? * or a control character, no space at either end, no dot at the end, and not a device name such as CON or COM1",
                 config.display()
             )
         );
         assert!(runner.commands.is_empty());
+    }
+}
+
+/// Bundles a config with this name and version, and returns the refusal
+/// and how many commands ran.
+fn refused(name: &str, version: &str) -> (PathBuf, Failure, usize) {
+    let temp = tempdir();
+    let config = config_in(temp.path(), name, version, "test.yard.lab", "yardlab");
+    let mut runner = FakeRunner::new(temp.path());
+    let failure = bundle(
+        &options(&config, &temp.path().join("out")),
+        temp.path(),
+        &mut runner,
+    )
+    .unwrap_err();
+    (config, failure, runner.commands.len())
+}
+
+#[test]
+fn braces_are_refused_in_the_name_and_the_version() {
+    for (name, version, key) in [
+        ("Lab {#1}", "0.1.0", "name"),
+        ("Lab }", "0.1.0", "name"),
+        ("Lab", "0.1.0-{#x}", "version"),
+    ] {
+        let (config, failure, ran) = refused(name, version);
+        assert_eq!(failure.step, "config");
+        assert_eq!(
+            failure.reason,
+            format!(
+                "{}: `{key}` must not hold `{{` or `}}` on Windows: Inno Setup's preprocessor and constants would read them",
+                config.display()
+            )
+        );
+        assert_eq!(ran, 0, "nothing ran");
+    }
+}
+
+#[test]
+fn a_name_starting_with_at_or_dash_is_refused() {
+    for name in ["@Lab", "-Lab", "--Lab"] {
+        let (config, failure, ran) = refused(name, "0.1.0");
+        assert_eq!(failure.step, "config");
+        assert_eq!(
+            failure.reason,
+            format!(
+                "{}: `name` must not start with `@` or `-` on Windows: tar would read it as an option or an archive to include",
+                config.display()
+            )
+        );
+        assert_eq!(ran, 0, "nothing ran");
+    }
+}
+
+#[test]
+fn a_file_name_longer_than_windows_allows_is_refused() {
+    let arch = std::env::consts::ARCH;
+    // The zip's name, `<Name>-0.1.0-windows-<arch>.zip`, is the longest.
+    let suffix = format!("-0.1.0-windows-{arch}.zip").len();
+    let fits = "a".repeat(255 - suffix);
+    let temp = tempdir();
+    let config = config_in(temp.path(), &fits, "0.1.0", "test.yard.lab", "yardlab");
+    bundle(
+        &options(&config, &temp.path().join("out")),
+        temp.path(),
+        &mut FakeRunner::new(temp.path()),
+    )
+    .unwrap();
+
+    // Counted in UTF-16 units: one `𝄞` is two.
+    for name in [format!("{fits}a"), format!("{}𝄞", &fits[1..])] {
+        let (config, failure, ran) = refused(&name, "0.1.0");
+        assert_eq!(failure.step, "config");
+        assert_eq!(
+            failure.reason,
+            format!(
+                "{}: `name` and `version` make the file name {:?}, longer than Windows' 255 characters",
+                config.display(),
+                format!("{name}-0.1.0-windows-{arch}.zip")
+            )
+        );
+        assert_eq!(ran, 0, "nothing ran");
     }
 }
 
@@ -732,7 +967,7 @@ fn a_failed_installer_leaves_the_previous_package_alone() {
     let out = temp.path().join("out");
     let (setup, zip) = previous_package(&out);
     let mut runner = FakeRunner::new(temp.path());
-    runner.fail = Some("ISCC");
+    runner.fail = Some("ISCC /Q");
     let failure = bundle(
         &options(&under_test("plain"), &out),
         temp.path(),

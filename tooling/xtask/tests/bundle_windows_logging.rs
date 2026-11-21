@@ -112,15 +112,22 @@ fn start_logs() {
     ));
 }
 
-/// A Windows host whose `PATH` holds a fake `ISCC.exe`.
+/// A Windows host whose `PATH` holds a fake `ISCC.exe`, and whose
+/// `%SystemRoot%\System32` holds fake `tar.exe` and `certutil.exe`.
 fn host(temp: &std::path::Path, system: &str) -> WindowsHost {
     let inno = temp.join("inno");
     std::fs::create_dir_all(&inno).unwrap();
     std::fs::write(inno.join("ISCC.exe"), b"").unwrap();
+    let root = temp.join("Windows");
+    std::fs::create_dir_all(root.join("System32")).unwrap();
+    for tool in ["tar.exe", "certutil.exe"] {
+        std::fs::write(root.join("System32").join(tool), b"").unwrap();
+    }
     WindowsHost {
         system: system.into(),
         path: Some(inno.into_os_string()),
-        ..WindowsHost::default()
+        program_files_x86: None,
+        system_root: Some(root.into_os_string()),
     }
 }
 
@@ -166,7 +173,7 @@ fn bundling_runs_inside_the_bundle_windows_group() {
         )
         .unwrap_err();
         let mut failing = FakeRunner::new(temp.path());
-        failing.fail = Some("ISCC");
+        failing.fail = Some("ISCC /Q");
         bundle_windows(&options, &windows, &interrupt, &mut failing).unwrap_err();
         bundle_windows(
             &dev,

@@ -37,7 +37,7 @@ pub struct WindowsArgs {
 }
 
 /// What the host gives `bundle windows`: its system, and where Inno Setup's
-/// compiler and Windows' `tar.exe` are looked for.
+/// compiler and Windows' own tools are looked for.
 #[derive(Debug, Clone, Default)]
 pub struct WindowsHost {
     /// `std::env::consts::OS`: anything but `windows` is refused.
@@ -46,7 +46,7 @@ pub struct WindowsHost {
     pub path: Option<OsString>,
     /// `%ProgramFiles(x86)%`, where Inno Setup 6 installs itself.
     pub program_files_x86: Option<OsString>,
-    /// `%SystemRoot%`, whose `System32\tar.exe` makes the zip.
+    /// `%SystemRoot%`, whose `System32` holds `tar.exe` and `certutil.exe`.
     pub system_root: Option<OsString>,
 }
 
@@ -75,14 +75,86 @@ impl WindowsHost {
         on_path.chain(installed).find(|path| path.is_file())
     }
 
-    /// Windows' own `tar.exe`, never another `tar` that `PATH` may find
-    /// first, such as Git's, which cannot write a zip.
-    fn tar(&self) -> PathBuf {
-        match &self.system_root {
-            Some(root) => Path::new(root).join("System32").join("tar.exe"),
-            None => PathBuf::from("tar.exe"),
+    /// `%SystemRoot%\System32\<program>`, never one that `PATH` finds first,
+    /// such as Git's `tar`, which cannot write a zip.
+    fn system_tool(&self, program: &str) -> Result<PathBuf, String> {
+        let root = self
+            .system_root
+            .as_ref()
+            .ok_or_else(|| format!("%SystemRoot% is not set, so {program} cannot be found"))?;
+        let tool = Path::new(root).join("System32").join(program);
+        if tool.is_file() {
+            Ok(tool)
+        } else {
+            Err(format!(
+                "Windows' {program} was not found at {}",
+                tool.display()
+            ))
         }
     }
+}
+
+/// The external programs one run uses, each by its full path.
+struct Tools {
+    iscc: PathBuf,
+    tar: PathBuf,
+    certutil: PathBuf,
+}
+
+/// The oldest Inno Setup that reads the script: `x64compatible` and a UTF-8
+/// script without a byte order mark came with 6.3.
+const OLDEST_INNO_SETUP: (u32, u32) = (6, 3);
+
+/// Finds the tools and checks Inno Setup's version, from the banner that
+/// `ISCC.exe /?` prints (`Inno Setup 6.3.3 Command-Line Compiler`).
+fn tools(host: &WindowsHost, runner: &mut dyn Runner) -> Result<Tools, Failure> {
+    let refuse = |reason: String| Failure::new("tools", reason);
+    let iscc = host.iscc().ok_or_else(|| {
+        refuse(
+            "Inno Setup's compiler was not found: ISCC.exe is neither on PATH nor in %ProgramFiles(x86)%\\Inno Setup 6".into(),
+        )
+    })?;
+    // `/?` prints the banner and the options; its exit code says nothing of
+    // the version.
+    let (_, banner) = runner
+        .report(Command::new(&iscc).arg("/?"))
+        .map_err(refuse)?;
+    let banner = String::from_utf8_lossy(&banner);
+    let version = inno_setup_version(&banner).ok_or_else(|| {
+        refuse(format!(
+            "could not read Inno Setup's version from {} /?",
+            iscc.display()
+        ))
+    })?;
+    tracing::debug!(iscc = %iscc.display(), version = %version.0, "inno setup");
+    if version.1 < OLDEST_INNO_SETUP {
+        return Err(refuse(format!(
+            "Inno Setup {} at {} is too old: bundle windows needs {}.{} or later",
+            version.0,
+            iscc.display(),
+            OLDEST_INNO_SETUP.0,
+            OLDEST_INNO_SETUP.1
+        )));
+    }
+    Ok(Tools {
+        iscc,
+        tar: host.system_tool("tar.exe").map_err(refuse)?,
+        certutil: host.system_tool("certutil.exe").map_err(refuse)?,
+    })
+}
+
+/// The version after `Inno Setup ` in the banner, as written and as its
+/// major and minor numbers.
+fn inno_setup_version(banner: &str) -> Option<(String, (u32, u32))> {
+    let rest = &banner[banner.find("Inno Setup ")? + "Inno Setup ".len()..];
+    let written: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let mut numbers = written.split('.').map(|part| part.parse::<u32>().ok());
+    let major = numbers.next()??;
+    let minor = numbers.next().flatten().unwrap_or(0);
+    Some((written.clone(), (major, minor)))
 }
 
 /// What `bundle_windows` made, each with its SHA-256 in hex.
@@ -152,13 +224,7 @@ fn bundle(
     let product = read_config(&config, options.dev)?;
 
     tracing::debug!("tools");
-    let iscc = host.iscc().ok_or_else(|| {
-        Failure::new(
-            "tools",
-            "Inno Setup's compiler was not found: ISCC.exe is neither on PATH nor in %ProgramFiles(x86)%\\Inno Setup 6",
-        )
-    })?;
-    tracing::debug!(iscc = %iscc.display(), "inno setup");
+    let tools = tools(host, runner)?;
 
     if product.windows.signing.is_some() {
         // TODO(packaging-5e-windows-signing): sign the `.exe` and the
@@ -174,8 +240,7 @@ fn bundle(
         dev: options.dev,
         binary: &binary,
         out: &out,
-        iscc: &iscc,
-        tar: &host.tar(),
+        tools: &tools,
         interrupt,
     };
     let result = super::staged(&out, "icon", "windows", |staging| {
@@ -185,36 +250,71 @@ fn bundle(
 }
 
 /// Reads the config as every system does, and checks what Windows adds: the
-/// name and the version are Windows file names, and the identifier fits
-/// `AppId`.
+/// name and the version are Windows file names that Inno Setup and `tar`
+/// read as written, the files named after them fit Windows' limit, and the
+/// identifier fits `AppId`.
 fn read_config(config: &Path, dev: bool) -> Result<BuildConfig, Failure> {
     let product = read_product(config, dev, false)?;
+    let file = config.display();
     let refuse = |reason: String| Failure::new("config", reason);
     for (key, value) in [("name", &product.name), ("version", &product.version)] {
+        if value.contains(['{', '}']) {
+            return Err(refuse(format!(
+                "{file}: `{key}` must not hold `{{` or `}}` on Windows: Inno Setup's preprocessor and constants would read them"
+            )));
+        }
         if !is_windows_file_name(value) {
             return Err(refuse(format!(
-                "{}: `{key}` must be a Windows file name: none of < > : \" / \\ | ? * or a control character, no space at either end, no dot at the end, and not a device name such as CON",
-                config.display()
+                "{file}: `{key}` must be a Windows file name: none of < > : \" / \\ | ? * or a control character, no space at either end, no dot at the end, and not a device name such as CON or COM1"
+            )));
+        }
+    }
+    if product.name.starts_with(['@', '-']) {
+        return Err(refuse(format!(
+            "{file}: `name` must not start with `@` or `-` on Windows: tar would read it as an option or an archive to include"
+        )));
+    }
+    let arch = std::env::consts::ARCH;
+    let name = &product.name;
+    for made in [
+        format!("{name}.exe"),
+        format!("{name}.lnk"),
+        format!("{}.exe", setup_base_name(&product)),
+        format!("{name}-{}-windows-{arch}.zip", product.version),
+    ] {
+        if made.encode_utf16().count() > FILE_NAME_LIMIT {
+            return Err(refuse(format!(
+                "{file}: `name` and `version` make the file name {made:?}, longer than Windows' {FILE_NAME_LIMIT} characters"
             )));
         }
     }
     if product.identifier.len() > APP_ID_LIMIT {
         return Err(refuse(format!(
-            "{}: `identifier` is the installer's AppId, which Inno Setup limits to {APP_ID_LIMIT} characters",
-            config.display()
+            "{file}: `identifier` is the installer's AppId, which Inno Setup limits to {APP_ID_LIMIT} characters"
         )));
     }
     Ok(product)
 }
 
+/// Windows' limit on one file name, in UTF-16 units.
+const FILE_NAME_LIMIT: usize = 255;
+
 /// Whether Windows accepts `value` as a file name, and keeps it as written.
+/// The device names are reserved with any extension, and `COM` and `LPT`
+/// with a superscript digit too.
 fn is_windows_file_name(value: &str) -> bool {
     const DEVICES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
-    let stem = value.split('.').next().unwrap_or("").to_ascii_uppercase();
-    let device = DEVICES.contains(&stem.as_str())
-        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.len() == 4
-            && stem.as_bytes()[3].is_ascii_digit());
+    let stem = value.split('.').next().unwrap_or("").to_uppercase();
+    let numbered = ["COM", "LPT"].iter().any(|prefix| {
+        stem.strip_prefix(prefix).is_some_and(|rest| {
+            let mut digits = rest.chars();
+            digits
+                .next()
+                .is_some_and(|c| c.is_ascii_digit() || "¹²³".contains(c))
+                && digits.next().is_none()
+        })
+    });
+    let device = DEVICES.contains(&stem.as_str()) || numbered;
     !value.is_empty()
         && !device
         && !value.starts_with(' ')
@@ -230,8 +330,7 @@ struct Job<'a> {
     dev: bool,
     binary: &'a Path,
     out: &'a Path,
-    iscc: &'a Path,
-    tar: &'a Path,
+    tools: &'a Tools,
     interrupt: &'a Interrupt,
 }
 
@@ -248,8 +347,7 @@ fn in_temp(
         dev,
         binary,
         out,
-        iscc,
-        tar,
+        tools,
         interrupt,
     } = *job;
     let name = &product.name;
@@ -266,7 +364,7 @@ fn in_temp(
     step("installer", interrupt)?;
     let installer = |reason| Failure::new("installer", reason);
     runner
-        .run(Command::new(iscc).arg("/Q").arg(&script))
+        .run(Command::new(&tools.iscc).arg("/Q").arg(&script))
         .map_err(installer)?;
     let setup_name = format!("{}.exe", setup_base_name(product));
     let setup = temp.join(&setup_name);
@@ -276,22 +374,22 @@ fn in_temp(
             setup.display()
         )));
     }
-    let setup_digest = sha256(&setup, runner).map_err(installer)?;
+    let setup_digest = sha256(&tools.certutil, &setup, runner).map_err(installer)?;
 
     step("zip", interrupt)?;
     let zip = |reason| Failure::new("zip", reason);
     let staged_zip = temp.join("release.zip");
     runner
         .run(
-            Command::new(tar)
+            Command::new(&tools.tar)
                 .args(["-a", "-c", "-f"])
                 .arg(&staged_zip)
                 .arg("-C")
-                .arg(&temp)
+                .arg(temp.join(PAYLOAD))
                 .arg(name),
         )
         .map_err(zip)?;
-    let zip_digest = sha256(&staged_zip, runner).map_err(zip)?;
+    let zip_digest = sha256(&tools.certutil, &staged_zip, runner).map_err(zip)?;
 
     // Both are published together, or neither is.
     not_interrupted("publish", interrupt)?;
@@ -324,11 +422,17 @@ fn setup_base_name(product: &BuildConfig) -> String {
     )
 }
 
-/// Lays out `<folder>/<Name>/<Name>.exe` and `<folder>/<Name>.iss`, and
-/// returns the script's path. The icon is already at `<folder>/<Name>.ico`.
+/// The folder of the staging folder that holds the app's tree, apart from
+/// the files xtask names itself (`release.zip`, the previous files kept while
+/// publishing), so that no name meets them.
+const PAYLOAD: &str = "payload";
+
+/// Lays out `<folder>/payload/<Name>/<Name>.exe` and `<folder>/<Name>.iss`,
+/// and returns the script's path. The icon is already at
+/// `<folder>/<Name>.ico`.
 fn lay_out(product: &BuildConfig, dev: bool, binary: &Path, folder: &Path) -> io::Result<PathBuf> {
     let name = &product.name;
-    let app = folder.join(name);
+    let app = folder.join(PAYLOAD).join(name);
     fs::create_dir_all(&app)?;
     fs::copy(binary, app.join(format!("{name}.exe")))?;
     let script = folder.join(format!("{name}.iss"));
@@ -339,9 +443,9 @@ fn lay_out(product: &BuildConfig, dev: bool, binary: &Path, folder: &Path) -> io
 /// The SHA-256 of `file` in hex, from Windows' `certutil -hashfile`, which
 /// prints it on a line of its own, in pairs separated by spaces on older
 /// versions.
-fn sha256(file: &Path, runner: &mut dyn Runner) -> Result<String, String> {
+fn sha256(certutil: &Path, file: &Path, runner: &mut dyn Runner) -> Result<String, String> {
     let output = runner.output(
-        Command::new("certutil")
+        Command::new(certutil)
             .arg("-hashfile")
             .arg(file)
             .arg("SHA256"),
@@ -384,11 +488,6 @@ fn write_icon(icon: &Path, out: &Path) -> Result<(), String> {
         .map_err(|error| format!("could not write {}: {error}", out.display()))
 }
 
-/// A value where Inno Setup reads constants: a `{` is written `{{`.
-fn constants(value: &str) -> String {
-    value.replace('{', "{{")
-}
-
 /// A parameter of a section: in double quotes, each `"` inside doubled.
 fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
@@ -396,15 +495,14 @@ fn quoted(value: &str) -> String {
 
 /// The text of `<Name>.iss`, every value from the config. Paths of the
 /// staged files are relative to the script, as Inno Setup's `SourceDir` is
-/// the script's folder; they are read when compiling, where Inno Setup reads
-/// no constants.
+/// the script's folder. The name and the version hold no `{` or `}`, which
+/// Inno Setup's preprocessor and its constants would read.
 pub fn inno_script(product: &BuildConfig, dev: bool, arch: &str) -> String {
     let name = &product.name;
-    let app_name = constants(name);
-    let version = constants(&product.version);
+    let version = &product.version;
     let identifier = &product.identifier;
     let scheme = &product.url_scheme;
-    let exe = format!("{{app}}\\{app_name}.exe");
+    let exe = format!("{{app}}\\{name}.exe");
     let arguments = if dev { "dev " } else { "" };
     let mut text = format!(
         "; Made by `cargo xtask bundle windows` from {identifier}'s product config.\n\
@@ -413,11 +511,11 @@ pub fn inno_script(product: &BuildConfig, dev: bool, arch: &str) -> String {
          ; The identifier: stable across versions, unique as a reverse-domain name,\n\
          ; and readable in the uninstall key `{identifier}_is1`.\n\
          AppId={identifier}\n\
-         AppName={app_name}\n\
+         AppName={name}\n\
          AppVersion={version}\n\
-         AppVerName={app_name} {version}\n\
-         DefaultDirName={{localappdata}}\\Programs\\{app_name}\n\
-         DefaultGroupName={app_name}\n\
+         AppVerName={name} {version}\n\
+         DefaultDirName={{localappdata}}\\Programs\\{name}\n\
+         DefaultGroupName={name}\n\
          DisableProgramGroupPage=yes\n\
          PrivilegesRequired=lowest\n"
     );
@@ -453,28 +551,37 @@ pub fn inno_script(product: &BuildConfig, dev: bool, arch: &str) -> String {
          Name: {shortcut}; Filename: {target}; AppUserModelID: {model}{parameters}\n\
          \n\
          [Registry]\n\
-         Root: HKCU; Subkey: {key}; ValueType: string; ValueName: \"\"; ValueData: {url_name}; Flags: uninsdeletekey\n\
-         Root: HKCU; Subkey: {key}; ValueType: string; ValueName: \"URL Protocol\"; ValueData: \"\"\n\
-         Root: HKCU; Subkey: {icon_key}; ValueType: string; ValueName: \"\"; ValueData: {icon}\n\
-         Root: HKCU; Subkey: {command_key}; ValueType: string; ValueName: \"\"; ValueData: {command}\n\
+         ; Uninstall removes the values written here, then each key once it is empty,\n\
+         ; so what another program keeps under the scheme stays.\n\
+         Root: HKCU; Subkey: {key}; ValueType: none; Flags: uninsdeletekeyifempty\n\
+         Root: HKCU; Subkey: {key}; ValueType: string; ValueName: \"\"; ValueData: {url_name}; Flags: uninsdeletevalue\n\
+         Root: HKCU; Subkey: {key}; ValueType: string; ValueName: \"URL Protocol\"; ValueData: \"\"; Flags: uninsdeletevalue\n\
+         Root: HKCU; Subkey: {icon_key}; ValueType: none; Flags: uninsdeletekeyifempty\n\
+         Root: HKCU; Subkey: {icon_key}; ValueType: string; ValueName: \"\"; ValueData: {icon}; Flags: uninsdeletevalue\n\
+         Root: HKCU; Subkey: {shell_key}; ValueType: none; Flags: uninsdeletekeyifempty\n\
+         Root: HKCU; Subkey: {open_key}; ValueType: none; Flags: uninsdeletekeyifempty\n\
+         Root: HKCU; Subkey: {command_key}; ValueType: none; Flags: uninsdeletekeyifempty\n\
+         Root: HKCU; Subkey: {command_key}; ValueType: string; ValueName: \"\"; ValueData: {command}; Flags: uninsdeletevalue\n\
          \n\
          [Run]\n\
          Filename: {target}; {run_parameters}Description: {launch}; Flags: nowait postinstall skipifsilent\n",
         setup = setup_base_name(product),
         mutex = yard_product::instance_name(identifier),
-        source = quoted(&format!("{name}\\{name}.exe")),
-        shortcut = quoted(&format!("{{userprograms}}\\{app_name}")),
+        source = quoted(&format!("{PAYLOAD}\\{name}\\{name}.exe")),
+        shortcut = quoted(&format!("{{userprograms}}\\{name}")),
         target = quoted(&exe),
         model = quoted(identifier),
         parameters = if dev { "; Parameters: \"dev\"" } else { "" },
         run_parameters = if dev { "Parameters: \"dev\"; " } else { "" },
         key = quoted(&format!("Software\\Classes\\{scheme}")),
         icon_key = quoted(&format!("Software\\Classes\\{scheme}\\DefaultIcon")),
+        shell_key = quoted(&format!("Software\\Classes\\{scheme}\\shell")),
+        open_key = quoted(&format!("Software\\Classes\\{scheme}\\shell\\open")),
         command_key = quoted(&format!("Software\\Classes\\{scheme}\\shell\\open\\command")),
-        url_name = quoted(&format!("URL:{app_name}")),
+        url_name = quoted(&format!("URL:{name}")),
         icon = quoted(&format!("\"{exe}\",0")),
         command = quoted(&format!("\"{exe}\" {arguments}\"%1\"")),
-        launch = quoted(&format!("Launch {app_name}")),
+        launch = quoted(&format!("Launch {name}")),
     ));
     text
 }

@@ -30,6 +30,9 @@ cargo test -p xtask --test bundle_windows_end_to_end -- --ignored 2>&1 | Select-
 
 function Check($name, $scheme, $id, $var, $dir) {
   Say "== install $name"
+  # A value another program put under the scheme key must survive the uninstall.
+  New-Item -Force "HKCU:\Software\Classes\$scheme" | Out-Null
+  New-ItemProperty -Force -Path "HKCU:\Software\Classes\$scheme" -Name "OtherApp" -Value "keep" | Out-Null
   $setup = Get-ChildItem "dist/$dir/*-setup.exe"
   $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$PWD\bundle-logs\install-$dir.log" -Wait -PassThru
   Say "install exit=$($p.ExitCode)"
@@ -76,7 +79,7 @@ function Check($name, $scheme, $id, $var, $dir) {
     Start-Process $cmd -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
     for ($i = 0; $i -lt 60 -and (Test-Path "$env:LOCALAPPDATA\Programs\$name"); $i++) { Start-Sleep 1 }
   }
-  Say "after uninstall: scheme key=$(Test-Path $k) uninstall key=$(Test-Path $uk) app folder=$(Test-Path "$env:LOCALAPPDATA\Programs\$name") shortcut=$(Test-Path $lnk) data kept=$(Test-Path "$env:LOCALAPPDATA\$name")"
+  Say "after uninstall: scheme key=$(Test-Path $k) uninstall key=$(Test-Path $uk) app folder=$(Test-Path "$env:LOCALAPPDATA\Programs\$name") shortcut=$(Test-Path $lnk) data kept=$(Test-Path "$env:LOCALAPPDATA\$name") other value kept=$((Get-ItemProperty $k -ErrorAction SilentlyContinue).OtherApp)"
   [Environment]::SetEnvironmentVariable($var, $null, 'Process')
 }
 Check 'Lab' 'yardlab' 'test.yard.lab' 'LAB_LIFECYCLE' 'plain'
