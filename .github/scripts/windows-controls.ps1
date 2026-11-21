@@ -27,10 +27,16 @@ public static class W {
   public const uint LDOWN = 2, LUP = 4, RDOWN = 8, RUP = 16;
   public static void Click(int x, int y) { SetCursorPos(x, y); System.Threading.Thread.Sleep(150); mouse_event(LDOWN,0,0,0,UIntPtr.Zero); mouse_event(LUP,0,0,0,UIntPtr.Zero); }
   public static void RightClick(int x, int y) { SetCursorPos(x, y); System.Threading.Thread.Sleep(150); mouse_event(RDOWN,0,0,0,UIntPtr.Zero); mouse_event(RUP,0,0,0,UIntPtr.Zero); }
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
+  public static void MoveTo(int x, int y) {
+    // A real input event, in the 0..65535 absolute space, as a physical mouse makes.
+    uint ax = (uint)(x * 65535 / (GetSystemMetrics(0) - 1)), ay = (uint)(y * 65535 / (GetSystemMetrics(1) - 1));
+    mouse_event(0x0001 | 0x8000, ax, ay, 0, UIntPtr.Zero);
+  }
   public static void Drag(int x, int y, int dx, int dy) {
-    SetCursorPos(x, y); System.Threading.Thread.Sleep(150); mouse_event(LDOWN,0,0,0,UIntPtr.Zero);
-    for (int i = 1; i <= 20; i++) { System.Threading.Thread.Sleep(20); SetCursorPos(x + dx * i / 20, y + dy * i / 20); }
-    System.Threading.Thread.Sleep(150); mouse_event(LUP,0,0,0,UIntPtr.Zero);
+    MoveTo(x, y); System.Threading.Thread.Sleep(150); mouse_event(LDOWN,0,0,0,UIntPtr.Zero);
+    for (int i = 1; i <= 20; i++) { System.Threading.Thread.Sleep(30); MoveTo(x + dx * i / 20, y + dy * i / 20); }
+    System.Threading.Thread.Sleep(300); mouse_event(LUP,0,0,0,UIntPtr.Zero);
   }
 }
 "@
