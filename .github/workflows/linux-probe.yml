@@ -15,6 +15,11 @@ jobs:
       YARD_HOME: /tmp/yard-home
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          df -h / | tee disk.log
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / | tee -a disk.log
       - name: System packages (Zed's script/linux, GPUI's share)
         run: |
           sudo apt-get update -q
@@ -82,7 +87,6 @@ jobs:
           ls -R ~/.config/yard ~/.local/share/yard > dirs.txt 2>&1 || true
           bash .github/scripts/linux-controls.sh || true
           bash .github/scripts/linux-instance.sh || true
-          bash .github/scripts/linux-bundle.sh || true
           pkill -f target/debug/yard || true
       - name: Headless screenshot of the production window
         if: steps.build.outcome == 'success'
@@ -91,6 +95,22 @@ jobs:
           env -u YARD_HOME YARD_LIFECYCLE=info,screenshot=debug cargo run -p screenshot -- --out headless.png 2>&1 | tee headless.log
           cargo run -p screenshot -- --out gallery.png --width 640 --height 400 --view gallery --gallery window-controls 2>&1 | tail -3 | tee -a headless.log
           cargo test -p screenshot -- --ignored 2>&1 | tail -5 | tee headless-test.log
+      - name: Bundle, install, and open URLs (part 4d)
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          pkill -f target/debug/yard || true
+          rm -rf target/debug
+          (while true; do date +%T; df -h / | tail -1; free -m | sed -n 2p; sleep 30; done) > resources.log 2>&1 &
+          export DISPLAY=:99
+          if ! xdpyinfo > /dev/null 2>&1; then
+            sudo Xorg :99 -noreset -nolisten tcp -config /tmp/dummy.conf -logfile /tmp/xorg2.log & sleep 3
+            dbus-launch xfwm4 --compositor=on --replace > xfwm4-2.log 2>&1 & sleep 3
+          fi
+          echo "X: $(xdpyinfo > /dev/null 2>&1 && echo up || echo down)" | tee -a disk.log
+          bash .github/scripts/linux-bundle.sh || true
+          df -h / | tee -a disk.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -127,6 +147,8 @@ jobs:
             screenshot-later.png
             /tmp/xorg.log
             bundle.txt
+            disk.log
+            resources.log
             bundle-logs/
             install1.log
             install2.log

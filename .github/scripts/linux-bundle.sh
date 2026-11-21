@@ -7,7 +7,8 @@ say() { echo "$*" | tee -a $out; }
 C=crates/yard_build_config/tests/configs
 mkdir -p bundle-logs
 for c in plain spaced other; do
-  cargo xtask bundle linux --config $C/$c/product.toml --out /tmp/dist-$c > bundle-logs/bundle-$c.log 2>&1
+  echo "bundling $c at $(date +%T)"
+  timeout 1200 cargo xtask bundle linux --config $C/$c/product.toml --out /tmp/dist-$c > bundle-logs/bundle-$c.log 2>&1
   say "== bundle $c: exit=$? last=$(tail -1 bundle-logs/bundle-$c.log)"
   say "$(grep '^sha256' bundle-logs/bundle-$c.log)"
   ( cd /tmp/dist-$c && find . -printf '%M %s %p\n' | sort -k3 ) >> $out
@@ -39,7 +40,7 @@ xdg-open 'yardlab://nobody/cold?token=secret' > xdg-cold.log 2>&1 &
 sleep 10
 say "running: $(pgrep -f '.local/lab.app/bin/lab' | wc -l)"
 say "== xdg-open with the instance running: the URL is forwarded"
-xdg-open 'yardlab://nobody/warm?token=secret' > xdg-warm.log 2>&1; say "xdg-open exit=$?"
+timeout 30 xdg-open 'yardlab://nobody/warm?token=secret' > xdg-warm.log 2>&1; say "xdg-open exit=$?"
 sleep 3
 say "running after forward: $(pgrep -f '.local/lab.app/bin/lab' | wc -l)"
 WID=$(xdotool search --classname test.yard.lab | head -1); say "window $WID"
