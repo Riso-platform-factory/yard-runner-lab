@@ -57,7 +57,7 @@ function Rect($h) { $r = New-Object W+RECT; [W]::GetWindowRect($h, [ref]$r) | Ou
 
 $exe = (Resolve-Path target\debug\yard.exe).Path
 $env:YARD_HOME = "$env:RUNNER_TEMP\controls-home"
-$env:YARD_LIFECYCLE = "info,yard_ui=debug,yard_shell=debug"
+$env:YARD_LIFECYCLE = "trace"
 $p = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput controls-app.log -RedirectStandardError controls-app-err.log
 Start-Sleep 15
 $p.Refresh(); $h = $p.MainWindowHandle
@@ -88,6 +88,7 @@ $b = Buttons $h; [W]::Click($b.max[0], $b.max[1]); Start-Sleep 2; Say "after max
 $b = Buttons $h; [W]::Click($b.max[0], $b.max[1]); Start-Sleep 2; Say "after restore button: $(State $h)"
 $b = Buttons $h; [W]::Click($b.bar[0], $b.bar[1]); Start-Sleep -Milliseconds 80; [W]::Click($b.bar[0], $b.bar[1]); Start-Sleep 2; Say "after double-click: $(State $h)"
 $b = Buttons $h; [W]::Click($b.bar[0], $b.bar[1]); Start-Sleep -Milliseconds 80; [W]::Click($b.bar[0], $b.bar[1]); Start-Sleep 2; Say "after second double-click: $(State $h)"
+Say "drag starts at $(Get-Date -Format HH:mm:ss.fff)"
 $before = State $h; $b = Buttons $h; [W]::Drag($b.bar[0], $b.bar[1], 120, 60); Start-Sleep 2; Say "drag bar: before [$before] after [$(State $h)]"
 $before = State $h; $r = Rect $h; [W]::Drag($r.R - 2, $r.T + 300, 80, 0); Start-Sleep 2; Say "drag right edge: before [$before] after [$(State $h)]"
 $b = Buttons $h; [W]::RightClick($b.bar[0], $b.bar[1]); Start-Sleep 2; Shot "controls-menu.png"; Say "right-click bar: screenshot controls-menu.png"
@@ -123,3 +124,5 @@ $gx = $o.X + 300; $gy = $o.Y + 16
 $o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
 [W]::Click($o.X + 300, $o.Y + 16); Start-Sleep -Milliseconds 80; [W]::Click($o.X + 300, $o.Y + 16); Start-Sleep 2; Say "gpui probe double-click: $(State $gh)"
 Stop-Process -Id $g.Id -ErrorAction SilentlyContinue
+
+Copy-Item "$env:RUNNER_TEMP\controls-home\logs\yard.log" controls-yard.log -ErrorAction SilentlyContinue
