@@ -114,7 +114,7 @@ Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process
 Say "== control: GPUI alone"
 $g = Start-Process -FilePath .github\drag_probe\target\debug\drag_probe.exe -PassThru; Start-Sleep 8
 $g.Refresh(); $gh = $g.MainWindowHandle
-Say "probe window $gh: $(State $gh)"
+Say "probe window ${gh}: $(State $gh)"
 [W]::SetForegroundWindow($gh) | Out-Null; Start-Sleep 1
 $c = New-Object W+RECT; [W]::GetClientRect($gh, [ref]$c) | Out-Null
 $o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
