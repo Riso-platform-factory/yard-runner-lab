@@ -1,0 +1,61 @@
+# Lab probe, not part of YARD: what happens to YARD on Windows today.
+name: windows-probe
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: never
+      YARD_HOME: C:\yard-home
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the production app
+        id: build
+        continue-on-error: true
+        run: cargo build -p yard --no-default-features 2>&1 | tee build.log
+      - name: Check the whole workspace
+        id: check
+        continue-on-error: true
+        run: cargo check --workspace --all-targets --keep-going 2>&1 | tee check.log
+      - name: Test the workspace
+        if: steps.check.outcome == 'success'
+        continue-on-error: true
+        run: cargo test --workspace --no-fail-fast -- --skip what_is_outside_dev_is_in_production 2>&1 | tee test.log
+      - name: Run the app and take a screenshot
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:YARD_LIFECYCLE = "info,yard=debug"
+          $p = Start-Process -FilePath target\debug\yard.exe -PassThru -RedirectStandardOutput app.log -RedirectStandardError app-err.log
+          Start-Sleep 20
+          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$PWD\screenshot.png")
+          "running: $(-not $p.HasExited)" | Out-File windows.txt
+          Get-Process yard -ErrorAction SilentlyContinue | Select-Object Id, MainWindowTitle | Out-File -Append windows.txt
+          Get-ChildItem -Recurse $env:YARD_HOME -ErrorAction SilentlyContinue | Select-Object FullName | Out-File dirs.txt
+          Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
+      - name: Headless screenshot
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: cargo run -p screenshot -- --out headless.png 2>&1 | tail -5 | tee headless.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-probe
+          path: |
+            *.log
+            *.txt
+            *.png
+          if-no-files-found: ignore

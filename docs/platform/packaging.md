@@ -193,7 +193,7 @@ The configs live in `crates/yard_build_config/tests/configs/`, where `xtask` rea
 | | What runs |
 |---|---|
 | macOS | Bundle, then `codesign --verify`, then `plutil` against the config; open the app and take a screenshot; `open <scheme>://…` reaches the extension |
-| Linux | Bundle, then `desktop-file-validate`; run `install.sh`, then start the app under Xvfb and take a screenshot; `xdg-open <scheme>://…` reaches the running instance (read in its log); a second start exits and the first one logs the forwarded arguments |
+| Linux | Bundle, then `desktop-file-validate`; run `install.sh`, then `xdg-open <scheme>://…` with no instance running and again with one running: the first starts the app with the URL, the second reaches the running instance (read in its log). The app runs on Xorg's dummy driver with xfwm4's compositor; the runner has no GPU, so its window shows black, and screenshots come from GPUI's headless renderer (`examples/screenshot`) |
 | Windows | Bundle; install silently (`/VERYSILENT`), then read the registry keys; start the app and take a screenshot; `start <scheme>://…` reaches the running instance; uninstall silently and check that the keys are gone |
 
 The lead reads every log and screenshot, and runs the macOS bundles locally too.
