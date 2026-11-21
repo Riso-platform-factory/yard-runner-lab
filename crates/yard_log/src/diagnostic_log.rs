@@ -313,6 +313,16 @@ pub fn startup_finished() {
     }
 }
 
+/// Ends the run and exits the process with `code`, for a start that ends
+/// before its app runs, such as one that hands its URLs to the running
+/// instance: groups still open end as interrupted, then `run-end`, and both
+/// logs are flushed. Windows runs no `atexit` handler when a process exits
+/// this way, so without this the last lines of the trace are lost there.
+pub fn exit(code: i32) -> ! {
+    at_exit();
+    std::process::exit(code)
+}
+
 /// Flushes diagnostics and waits up to 100 ms for queued lifecycle records.
 pub(crate) fn flush() {
     zlog::flush();
