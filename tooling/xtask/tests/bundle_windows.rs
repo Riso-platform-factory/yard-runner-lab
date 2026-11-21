@@ -777,6 +777,9 @@ fn the_name_and_the_version_must_be_windows_file_names() {
         ("COM².txt", "0.1.0", "name"),
         ("lpt³.txt", "0.1.0", "name"),
         ("LPT9", "0.1.0", "name"),
+        ("CON .txt", "0.1.0", "name"),
+        ("nul .x", "0.1.0", "name"),
+        ("COM1 .a", "0.1.0", "name"),
         ("Lab", "0.1/0", "version"),
         ("Lab", "0.1*", "version"),
     ] {
@@ -982,4 +985,72 @@ fn a_failed_installer_leaves_the_previous_package_alone() {
     assert_eq!(std::fs::read(&setup).unwrap(), b"old");
     assert_eq!(std::fs::read(&zip).unwrap(), b"old");
     assert_eq!(entries(&out).len(), 2);
+}
+
+#[test]
+fn a_directory_where_an_output_goes_is_refused_and_kept() {
+    let arch = std::env::consts::ARCH;
+    for (output, step) in [
+        (format!("Lab-0.1.0-{arch}-setup.exe"), "installer"),
+        (format!("Lab-0.1.0-windows-{arch}.zip"), "zip"),
+    ] {
+        let temp = tempdir();
+        let out = temp.path().join("out");
+        let (setup, zip) = previous_package(&out);
+        let directory = out.join(&output);
+        std::fs::remove_file(&directory).unwrap();
+        std::fs::create_dir_all(directory.join("inside")).unwrap();
+        std::fs::write(directory.join("inside/kept"), b"kept").unwrap();
+        let failure = bundle(
+            &options(&under_test("plain"), &out),
+            temp.path(),
+            &mut FakeRunner::new(temp.path()),
+        )
+        .unwrap_err();
+        assert_eq!(failure.step, step, "{output}");
+        assert_eq!(
+            failure.reason,
+            format!(
+                "{} exists and is not a file; move it away first",
+                directory.display()
+            )
+        );
+        assert_eq!(
+            std::fs::read(directory.join("inside/kept")).unwrap(),
+            b"kept",
+            "{output}: the directory is kept"
+        );
+        for file in [setup.clone(), zip.clone()] {
+            if file != directory {
+                assert_eq!(
+                    std::fs::read(&file).unwrap(),
+                    b"old",
+                    "nothing was published"
+                );
+            }
+        }
+        assert_eq!(entries(&out).len(), 2, "the temporary folder is gone");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_to_a_directory_where_an_output_goes_is_refused() {
+    let temp = tempdir();
+    let out = temp.path().join("out");
+    let (_, zip) = previous_package(&out);
+    let elsewhere = temp.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(elsewhere.join("kept"), b"kept").unwrap();
+    std::fs::remove_file(&zip).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &zip).unwrap();
+    let failure = bundle(
+        &options(&under_test("plain"), &out),
+        temp.path(),
+        &mut FakeRunner::new(temp.path()),
+    )
+    .unwrap_err();
+    assert_eq!(failure.step, "zip");
+    assert!(zip.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(elsewhere.join("kept")).unwrap(), b"kept");
 }

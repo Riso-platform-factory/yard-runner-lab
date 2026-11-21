@@ -764,7 +764,13 @@ impl Staging {
 
     /// Moves `from` to `to`, keeping what `to` held in the staging folder
     /// until the folder closes.
+    /// A file is never published over a directory, nor over a link to one:
+    /// what `to` held would be moved into the staging folder, and removed
+    /// with it.
     fn publish(&mut self, from: &Path, to: &Path) -> Result<(), String> {
+        if from.symlink_metadata().is_ok_and(|from| from.is_file()) {
+            replaceable_file(to)?;
+        }
         let previous = if exists(to) {
             let previous = self.path.join(format!("previous-{}", self.replaced.len()));
             rename(to, &previous)?;
@@ -1210,6 +1216,18 @@ pub fn xml_escape(value: &str) -> String {
         }
     }
     escaped
+}
+
+/// Whether a file may be published at `path`: nothing is there, or a
+/// regular file, which publishing keeps until it succeeds.
+fn replaceable_file(path: &Path) -> Result<(), String> {
+    if exists(path) && !path.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return Err(format!(
+            "{} exists and is not a file; move it away first",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn exists(path: &Path) -> bool {

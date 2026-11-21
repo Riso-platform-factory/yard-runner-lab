@@ -266,7 +266,13 @@ const FILE_NAME_LIMIT: usize = 255;
 /// with a superscript digit too.
 fn is_windows_file_name(value: &str) -> bool {
     const DEVICES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
-    let stem = value.split('.').next().unwrap_or("").to_uppercase();
+    // Windows drops the spaces at the end of the stem, so `CON .txt` is CON.
+    let stem = value
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches([' ', '.'])
+        .to_uppercase();
     let numbered = ["COM", "LPT"].iter().any(|prefix| {
         stem.strip_prefix(prefix).is_some_and(|rest| {
             let mut digits = rest.chars();
@@ -358,16 +364,19 @@ fn in_temp(
     // Both are published together, or neither is.
     not_interrupted("publish", interrupt)?;
     let published_setup = out.join(&setup_name);
-    tracing::debug!(destination = %published_setup.display(), "publish");
-    staging
-        .publish(&setup, &published_setup)
-        .map_err(installer)?;
-    tracing::debug!(installer = %published_setup.display(), sha256 = setup_digest, "installer");
     let published_zip = out.join(format!(
         "{name}-{}-windows-{}.zip",
         product.version,
         std::env::consts::ARCH
     ));
+    // Neither is published while the other could not be.
+    super::replaceable_file(&published_setup).map_err(installer)?;
+    super::replaceable_file(&published_zip).map_err(zip)?;
+    tracing::debug!(destination = %published_setup.display(), "publish");
+    staging
+        .publish(&setup, &published_setup)
+        .map_err(installer)?;
+    tracing::debug!(installer = %published_setup.display(), sha256 = setup_digest, "installer");
     staging.publish(&staged_zip, &published_zip).map_err(zip)?;
     tracing::debug!(zip = %published_zip.display(), sha256 = zip_digest, "zipped");
     Ok(WindowsBundled {
