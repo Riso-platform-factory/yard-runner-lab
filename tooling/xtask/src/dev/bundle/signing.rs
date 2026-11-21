@@ -486,7 +486,7 @@ fn quote(word: &str) -> String {
 }
 
 /// A word of a POSIX shell, in single quotes.
-fn shell_quote(word: &str) -> String {
+pub(super) fn shell_quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', "'\\''"))
 }
 

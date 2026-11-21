@@ -14,9 +14,9 @@
   },
   "yard/startup": {
     "files": {
-      "app/yard/src/startup.rs": "54f42a3d52673c7d"
+      "app/yard/src/startup.rs": "127f56278f5d0aa4"
     },
-    "promoted": "2026-11-20"
+    "promoted": "2026-11-21"
   },
   "yard_build_config/config": {
     "files": {
@@ -82,6 +82,12 @@
       "crates/yard_paths/src/file_check.rs": "c90740584b27f254"
     },
     "promoted": "2026-11-12"
+  },
+  "yard_paths/instance_files": {
+    "files": {
+      "crates/yard_paths/src/instance_files.rs": "8c0fbc0554ca6cee"
+    },
+    "promoted": "2026-11-21"
   },
   "yard_paths/keymap_file": {
     "files": {
@@ -161,6 +167,12 @@
     },
     "promoted": "2026-11-19"
   },
+  "yard_shell/instance": {
+    "files": {
+      "crates/yard_shell/src/instance.rs": "49e6e170efa3194d"
+    },
+    "promoted": "2026-11-21"
+  },
   "yard_shell/prompt": {
     "files": {
       "crates/yard_shell/src/prompt.rs": "14d4cba5ee0573e7"
@@ -175,9 +187,9 @@
   },
   "yard_shell/shell": {
     "files": {
-      "crates/yard_shell/src/shell.rs": "50e978465fcfc025"
+      "crates/yard_shell/src/shell.rs": "6a9d9e887dfcdcba"
     },
-    "promoted": "2026-11-20"
+    "promoted": "2026-11-21"
   },
   "yard_shell/window_bounds": {
     "files": {

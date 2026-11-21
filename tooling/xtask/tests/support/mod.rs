@@ -92,8 +92,8 @@ pub type CommandHook = Box<dyn FnMut(&Recorded)>;
 pub const LOGIN_KEYCHAIN: &str = "/Users/test/Library/Keychains/login.keychain-db";
 
 /// Records every command and does only what the next step needs: `cargo
-/// build` reports `binary`, `iconutil`, `ditto`, and `hdiutil` write their
-/// output file, `shasum` prints [`DIGEST`], `security list-keychains`
+/// build` reports `binary`, `iconutil`, `ditto`, `hdiutil`, and `tar -czf`
+/// write their output file, `shasum` and `sha256sum` print [`DIGEST`], `security list-keychains`
 /// prints and sets `search_list` (at first [`LOGIN_KEYCHAIN`]),
 /// `create-keychain` writes the keychain's file as `<path>-db`,
 /// `delete-keychain` takes the keychain out of `search_list`, and
@@ -200,6 +200,7 @@ impl xtask::Runner for FakeRunner {
         let last = recorded.args.last().map(PathBuf::from);
         match recorded.program.as_str() {
             "iconutil" | "ditto" | "hdiutil" => std::fs::write(last.unwrap(), b"made").unwrap(),
+            "tar" => std::fs::write(&recorded.args[1], b"made").unwrap(),
             "codesign" if recorded.args[0] == "--verify" => {
                 if let Some(hook) = &mut self.on_verify {
                     hook(&last.unwrap());
@@ -271,7 +272,7 @@ impl xtask::Runner for FakeRunner {
                 .map(|keychain| format!("    \"{keychain}\"\n"))
                 .collect::<String>()
                 .into_bytes(),
-            "shasum" => format!("{DIGEST}  {}\n", recorded.args.last().unwrap()).into_bytes(),
+            "shasum" | "sha256sum" => format!("{DIGEST}  {}\n", recorded.args.last().unwrap()).into_bytes(),
             "cargo" | "cargo.exe" => format!(
                 "{}\n{}\n{}\n",
                 serde_json::json!({"reason": "compiler-artifact", "target": {"name": "yard_log"}, "executable": null}),

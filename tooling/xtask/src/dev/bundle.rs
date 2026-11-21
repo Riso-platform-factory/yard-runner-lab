@@ -1,9 +1,12 @@
 //! `cargo xtask bundle macos`: makes `<name>.app`, and with `--zip`
 //! `<name>-<version>.zip`, from a product config; signs it with the
 //! developer's identity, notarizes it, and wraps it in a disk image when the
-//! config's `[release.macos]` asks.
+//! config's `[release.macos]` asks. `cargo xtask bundle linux` is in
+//! [`linux`]; what both do is here.
 
+mod linux;
 mod signing;
+pub use linux::{LinuxArgs, LinuxBundled, bundle_linux};
 pub use signing::Secrets;
 
 use std::fmt;
@@ -45,6 +48,9 @@ enum Task {
 enum System {
     /// Makes `<name>.app` from production code, signed ad hoc.
     Macos(MacosArgs),
+    /// Makes `<name>-<version>-linux-<arch>.tar.gz` from production code, on
+    /// Linux.
+    Linux(LinuxArgs),
 }
 
 /// The options of `cargo xtask bundle macos`.
@@ -302,6 +308,27 @@ pub fn main() -> ExitCode {
                 }
             }
         }
+        Task::Bundle(System::Linux(options)) => {
+            match bundle_linux(
+                &options,
+                std::env::consts::OS,
+                &interrupt,
+                &mut SystemRunner {
+                    interrupt: interrupt.clone(),
+                },
+            ) {
+                Ok(bundled) => {
+                    let (archive, digest) = &bundled.archive;
+                    println!("sha256 {digest}");
+                    println!("{}", archive.display());
+                    ExitCode::SUCCESS
+                }
+                Err(failure) => {
+                    eprintln!("{failure}");
+                    ExitCode::from(interrupt.exit_code())
+                }
+            }
+        }
     }
 }
 
@@ -332,7 +359,14 @@ pub fn bundle_macos(
     )
     .entered();
     let result = bundle(&config, options, secrets, interrupt, runner);
-    if let Err(failure) = &result {
+    log_outcome(&result, interrupt);
+    result
+}
+
+/// Logs how a run ended, inside its group: a refusal at `info`, an
+/// interrupt at `info`, a failure at `error` in the diagnostic log.
+fn log_outcome<T>(result: &Result<T, Failure>, interrupt: &Interrupt) {
+    if let Err(failure) = result {
         if failure.is_refusal() {
             tracing::info!(step = failure.step, "refused: {}", failure.reason);
         } else if interrupt.is_set() {
@@ -345,36 +379,39 @@ pub fn bundle_macos(
             log::error!("failed at {}: {}", failure.step, failure.reason);
         }
     }
-    result
 }
 
-fn bundle(
+/// Checks the arguments every system shares, and makes the config and the
+/// `--out` folder absolute.
+fn arguments(
     config: &Path,
-    options: &MacosArgs,
-    secrets: &Secrets,
-    interrupt: &Interrupt,
-    runner: &mut dyn Runner,
-) -> Result<Bundled, Failure> {
-    tracing::debug!("arguments");
+    out: Option<&Path>,
+    dev: bool,
+    env: &[String],
+) -> Result<(PathBuf, PathBuf), Failure> {
     let arguments = |reason: String| Failure::new("arguments", reason);
-    env_pairs(&options.env).map_err(arguments)?;
-    if !options.dev && !options.env.is_empty() {
+    env_pairs(env).map_err(arguments)?;
+    if !dev && !env.is_empty() {
         return Err(arguments("--env requires --dev".into()));
     }
     let config = std::path::absolute(config).map_err(|error| arguments(error.to_string()))?;
-    let out = options
-        .out
-        .clone()
+    let out = out
+        .map(Path::to_owned)
         .unwrap_or_else(|| repository().join(DEFAULT_OUT));
     let out = std::path::absolute(out).map_err(|error| arguments(error.to_string()))?;
+    Ok((config, out))
+}
 
-    tracing::debug!("config");
-    let product = read_config(&config, options)?;
-
-    tracing::debug!("secrets");
-    let signing =
-        Signing::new(&product, secrets).map_err(|reason| Failure::new("secrets", reason))?;
-
+/// The steps `stages` and `build`: the stages check, then yard built in
+/// release with `PRODUCT_CONFIG` and the variables `envs`, production code
+/// only unless `dev`. Returns the executable Cargo reports.
+fn build(
+    config: &Path,
+    dev: bool,
+    envs: &[(&str, &str)],
+    interrupt: &Interrupt,
+    runner: &mut dyn Runner,
+) -> Result<PathBuf, Failure> {
     step("stages", interrupt)?;
     runner
         .run(
@@ -388,8 +425,9 @@ fn bundle(
     let mut build = cargo();
     build
         .args(["build", "--release", "-p", "yard", "--bin", "yard"])
-        .env("PRODUCT_CONFIG", &config);
-    if !options.dev {
+        .env("PRODUCT_CONFIG", config)
+        .envs(envs.iter().copied());
+    if !dev {
         build.arg("--no-default-features");
     }
     build.arg("--message-format=json-render-diagnostics");
@@ -398,6 +436,39 @@ fn bundle(
         .map_err(|reason| Failure::new("build", reason))?;
     let binary = reported_executable(&report).map_err(|reason| Failure::new("build", reason))?;
     tracing::debug!(binary = %binary.display(), "built");
+    Ok(binary)
+}
+
+/// A run that succeeded is still an interrupt when a signal arrived during
+/// its last step or its clean-up.
+fn interrupted_at_end<T>(result: Result<T, Failure>, interrupt: &Interrupt) -> Result<T, Failure> {
+    match result {
+        Ok(_) if interrupt.is_set() => {
+            tracing::info!("interrupted; stopping after the current step");
+            Err(Failure::new("clean-up", INTERRUPTED))
+        }
+        result => result,
+    }
+}
+
+fn bundle(
+    config: &Path,
+    options: &MacosArgs,
+    secrets: &Secrets,
+    interrupt: &Interrupt,
+    runner: &mut dyn Runner,
+) -> Result<Bundled, Failure> {
+    tracing::debug!("arguments");
+    let (config, out) = arguments(config, options.out.as_deref(), options.dev, &options.env)?;
+
+    tracing::debug!("config");
+    let product = read_config(&config, options)?;
+
+    tracing::debug!("secrets");
+    let signing =
+        Signing::new(&product, secrets).map_err(|reason| Failure::new("secrets", reason))?;
+
+    let binary = build(&config, options.dev, &[], interrupt, runner)?;
 
     let mut session = Session::default();
     let job = Job {
@@ -425,15 +496,7 @@ fn bundle(
         }
         (Ok(_), Err(reason)) => Err(Failure::new("keychain", reason)),
     };
-    // A signal that arrived during the last step or the clean-up still
-    // makes the run an interrupt.
-    match result {
-        Ok(_) if interrupt.is_set() => {
-            tracing::info!("interrupted; stopping after the current step");
-            Err(Failure::new("clean-up", INTERRUPTED))
-        }
-        result => result,
-    }
+    interrupted_at_end(result, interrupt)
 }
 
 /// What one run bundles, and how.
@@ -458,25 +521,36 @@ fn signed(job: &Job, session: &mut Session, runner: &mut dyn Runner) -> Result<B
     }
 
     step("icon", interrupt)?;
+    staged(out, "icon", "macos", |staging| {
+        in_temp(staging, job, session, runner)
+    })
+}
+
+/// Runs `work` in a new [`Staging`] folder of `out`, made at the step
+/// `step`, and closes it: what `work` published stays, or, when it fails,
+/// every previous file is put back.
+fn staged<T>(
+    out: &Path,
+    step: &'static str,
+    system: &str,
+    work: impl FnOnce(&mut Staging) -> Result<T, Failure>,
+) -> Result<T, Failure> {
     fs::create_dir_all(out).map_err(|error| {
-        Failure::new(
-            "icon",
-            format!("could not create {}: {error}", out.display()),
-        )
+        Failure::new(step, format!("could not create {}: {error}", out.display()))
     })?;
-    let mut staging = Staging::new(out).map_err(|error| {
+    let mut staging = Staging::new(out, system).map_err(|error| {
         Failure::new(
-            "icon",
+            step,
             format!(
                 "could not create a temporary folder in {}: {error}",
                 out.display()
             ),
         )
     })?;
-    match in_temp(&mut staging, job, session, runner) {
-        Ok(bundled) => {
+    match work(&mut staging) {
+        Ok(made) => {
             staging.close(true);
-            Ok(bundled)
+            Ok(made)
         }
         Err(mut failure) => {
             for previous in staging.close(false) {
@@ -524,26 +598,7 @@ fn cargo() -> Command {
 /// single path components.
 fn read_config(config: &Path, options: &MacosArgs) -> Result<BuildConfig, Failure> {
     let refuse = |reason: String| Failure::new("config", reason);
-    let product = yard_build_config::read(config).map_err(refuse)?;
-    if options.dev {
-        // A review bundle must never take the real product's name,
-        // directories, identifier, or URL scheme; macOS compares these
-        // without case.
-        let production =
-            yard_build_config::read(&repository().join(PRODUCTION_CONFIG)).map_err(refuse)?;
-        for (key, value, real) in [
-            ("name", &product.name, &production.name),
-            ("identifier", &product.identifier, &production.identifier),
-            ("url_scheme", &product.url_scheme, &production.url_scheme),
-        ] {
-            if value.to_lowercase() == real.to_lowercase() {
-                return Err(refuse(format!(
-                    "{}: --dev requires a `{key}` different from the production product's",
-                    config.display()
-                )));
-            }
-        }
-    }
+    let product = read_product(config, options.dev, false)?;
     if !is_path_component(&product.name) {
         return Err(refuse(format!(
             "{}: name must be a single path component",
@@ -561,6 +616,44 @@ fn read_config(config: &Path, options: &MacosArgs) -> Result<BuildConfig, Failur
             "{}: version must be a single path component with `dmg`",
             config.display()
         )));
+    }
+    Ok(product)
+}
+
+/// Reads the config through `yard_build_config`; with `dev`, refuses a
+/// product that takes the production product's name, identifier, or URL
+/// scheme, compared without case, and with `linux` also its Linux `<name>`.
+fn read_product(config: &Path, dev: bool, linux: bool) -> Result<BuildConfig, Failure> {
+    let refuse = |reason: String| Failure::new("config", reason);
+    let product = yard_build_config::read(config).map_err(refuse)?;
+    if dev {
+        // A review bundle must never take the real product's name,
+        // directories, identifier, or URL scheme; macOS compares these
+        // without case.
+        let production =
+            yard_build_config::read(&repository().join(PRODUCTION_CONFIG)).map_err(refuse)?;
+        let file_names = (
+            yard_product::file_name(&product.name),
+            yard_product::file_name(&production.name),
+        );
+        let mut pairs = vec![
+            ("name", &product.name, &production.name),
+            ("identifier", &product.identifier, &production.identifier),
+            ("url_scheme", &product.url_scheme, &production.url_scheme),
+        ];
+        if linux {
+            // Two names that differ only outside their letters and digits
+            // share their Linux files and directories.
+            pairs.push(("name", &file_names.0, &file_names.1));
+        }
+        for (key, value, real) in pairs {
+            if value.to_lowercase() == real.to_lowercase() {
+                return Err(refuse(format!(
+                    "{}: --dev requires a `{key}` different from the production product's",
+                    config.display()
+                )));
+            }
+        }
     }
     Ok(product)
 }
@@ -602,7 +695,7 @@ fn reported_executable(report: &[u8]) -> Result<PathBuf, String> {
         .ok_or_else(|| "cargo reported no yard executable".to_owned())
 }
 
-/// The staging folder `<out>/.bundle-macos.<pid>-<n>`, inside `out` so what
+/// The staging folder `<out>/.bundle-<system>.<pid>-<n>`, inside `out` so what
 /// is made there moves into place by a rename. It is closed on every path, a
 /// panic too: dropped without [`Staging::close`], it closes as after a
 /// failure.
@@ -623,9 +716,9 @@ struct Replaced {
 }
 
 impl Staging {
-    fn new(out: &Path) -> io::Result<Self> {
+    fn new(out: &Path, system: &str) -> io::Result<Self> {
         for attempt in 0.. {
-            let path = out.join(format!(".bundle-macos.{}-{attempt}", std::process::id()));
+            let path = out.join(format!(".bundle-{system}.{}-{attempt}", std::process::id()));
             match fs::create_dir(&path) {
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 result => {
@@ -818,7 +911,7 @@ fn in_temp(
             .map_err(zip)?;
         // The digest comes from the staged zip, so no published zip lacks
         // one.
-        let digest = sha256(&staged, runner).map_err(zip)?;
+        let digest = sha256(&["shasum", "-a", "256"], &staged, runner).map_err(zip)?;
         Some((staged, digest))
     } else {
         None
@@ -847,7 +940,7 @@ fn in_temp(
                 }
             }
         }
-        let digest = sha256(&image, runner).map_err(dmg)?;
+        let digest = sha256(&["shasum", "-a", "256"], &image, runner).map_err(dmg)?;
         Some((image, digest))
     } else {
         None
@@ -961,14 +1054,16 @@ fn make_icns(temp: &Path, icon: &Path, runner: &mut dyn Runner) -> Result<PathBu
     Ok(icns)
 }
 
-fn sha256(file: &Path, runner: &mut dyn Runner) -> Result<String, String> {
-    let output = runner.output(Command::new("shasum").args(["-a", "256"]).arg(file))?;
+/// The SHA-256 of `file` in hex, from `command` (such as `shasum -a 256`)
+/// run on it.
+fn sha256(command: &[&str], file: &Path, runner: &mut dyn Runner) -> Result<String, String> {
+    let output = runner.output(Command::new(command[0]).args(&command[1..]).arg(file))?;
     String::from_utf8_lossy(&output)
         .split_whitespace()
         .next()
         .filter(|digest| digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()))
         .map(str::to_owned)
-        .ok_or_else(|| "shasum printed no SHA-256".to_owned())
+        .ok_or_else(|| format!("{} printed no SHA-256", command[0]))
 }
 
 /// Lays out `<folder>/<name>.app`: the binary (behind a wrapper running `dev`
@@ -1012,14 +1107,18 @@ pub fn lay_out(
 /// `dev`.
 pub const WRAPPER: &str = "#!/bin/sh\nexec \"$0-bin\" dev \"$@\"\n";
 
-#[cfg(unix)]
 fn make_executable(path: &Path) -> io::Result<()> {
+    set_mode(path, 0o755)
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
 }
 
 #[cfg(not(unix))]
-fn make_executable(_: &Path) -> io::Result<()> {
+fn set_mode(_: &Path, _: u32) -> io::Result<()> {
     Ok(())
 }
 
