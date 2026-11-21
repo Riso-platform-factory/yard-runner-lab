@@ -42,7 +42,13 @@ fn files(folder: &Path) -> Vec<(String, u32)> {
             if path.is_dir() {
                 walk(root, &path, files);
             } else {
-                let relative = path.strip_prefix(root).unwrap().display().to_string();
+                // With `/` between the parts on every system, as in the archive.
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .display()
+                    .to_string()
+                    .replace('\\', "/");
                 files.push((relative, mode(&path)));
             }
         }

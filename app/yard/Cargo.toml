@@ -32,11 +32,17 @@ reqwest_client = { workspace = true }
 image.workspace = true
 
 [dev-dependencies]
-image.workspace = true
+# `ico` for the tests of `build.rs`, which include it.
+image = { workspace = true, features = ["ico"] }
 serde_json.workspace = true
 tempfile.workspace = true
 yard_build_config = { workspace = true, default-features = false }
 
 [build-dependencies]
 yard_build_config = { workspace = true, default-features = false }
-image.workspace = true
+# `ico` for the `.exe`'s icon.
+image = { workspace = true, features = ["ico"] }
+
+# The Windows resource, with the icon and the version, compiled on Windows.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource.workspace = true

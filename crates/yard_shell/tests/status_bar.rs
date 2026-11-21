@@ -12,7 +12,9 @@ use yard_shell::{Extension, FocusDown, FocusUp};
 
 const WIDTH: f32 = 800.;
 const HEIGHT: f32 = 600.;
-const TITLE_BAR: f32 = 34.;
+// The title bar's height on each platform, as Zed's `platform_title_bar_height`
+// gives it: 32 px on Windows, and at least 34 px elsewhere.
+const TITLE_BAR: f32 = if cfg!(windows) { 32. } else { 34. };
 const ITEM_WIDTH: f32 = 40.;
 const ITEM_HEIGHT: f32 = 20.;
 // Zed's `Base04` is 4px a side at the default density: the bar's height is its

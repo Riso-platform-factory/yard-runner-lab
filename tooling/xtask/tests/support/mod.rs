@@ -153,11 +153,18 @@ impl FakeRunner {
 
     fn record(&mut self, command: &Command, input: Option<&[u8]>) -> Result<Recorded, String> {
         let recorded = Recorded {
-            program: Path::new(command.get_program())
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned(),
+            // `cargo.exe` on Windows reads as `cargo`, as on other systems.
+            program: {
+                let name = Path::new(command.get_program())
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                match name.strip_suffix(std::env::consts::EXE_SUFFIX) {
+                    Some(stem) if !std::env::consts::EXE_SUFFIX.is_empty() => stem.to_owned(),
+                    _ => name,
+                }
+            },
             args: command
                 .get_args()
                 .map(|arg| arg.to_string_lossy().into_owned())

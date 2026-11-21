@@ -1,4 +1,5 @@
-//! The window icon that `build.rs` writes for Linux and FreeBSD builds.
+//! The window icon that `build.rs` writes for Linux and FreeBSD builds, and
+//! the icon and the resource script of the `.exe` for Windows builds.
 
 #[allow(dead_code)]
 #[path = "../build.rs"]
@@ -29,4 +30,81 @@ fn an_icon_without_a_png_extension_is_decoded_as_a_png() {
     build::write_window_icon(&icon, &out);
     let written = image::open(&out).expect("the window icon is a PNG");
     assert_eq!((written.width(), written.height()), (256, 256));
+}
+
+#[test]
+fn the_windows_icon_holds_one_png_frame_for_each_size_windows_uses() {
+    let folder = tempfile::tempdir().unwrap();
+    let icon = folder.path().join("app.ico");
+    build::write_windows_icon(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/yard_build_config/tests/configs/plain/icon.png"),
+        &icon,
+    )
+    .unwrap();
+    let bytes = std::fs::read(&icon).unwrap();
+    // ICONDIR: reserved 0, type 1 (icon), then the count of entries.
+    assert_eq!(bytes[..4], [0, 0, 1, 0]);
+    let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+    let mut sizes = Vec::new();
+    for entry in bytes[6..6 + 16 * count].chunks(16) {
+        // A width or height of 0 means 256.
+        let side = |byte: u8| if byte == 0 { 256 } else { u32::from(byte) };
+        let length = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+        let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
+        let frame = image::load_from_memory_with_format(
+            &bytes[offset..offset + length],
+            image::ImageFormat::Png,
+        )
+        .expect("each frame is a PNG");
+        assert_eq!(
+            (frame.width(), frame.height()),
+            (side(entry[0]), side(entry[1]))
+        );
+        sizes.push(frame.width());
+    }
+    assert_eq!(sizes, build::WINDOWS_ICON_SIZES);
+    // image's own ICO reader takes it too, and reads the largest frame.
+    let largest = image::open(&icon).expect("the icon is an ICO");
+    assert_eq!((largest.width(), largest.height()), (256, 256));
+}
+
+#[test]
+fn an_icon_that_is_not_a_png_is_an_error_naming_the_file() {
+    let folder = tempfile::tempdir().unwrap();
+    let icon = folder.path().join("broken.png");
+    std::fs::write(&icon, b"not a png").unwrap();
+    let error = build::write_windows_icon(&icon, &folder.path().join("app.ico")).unwrap_err();
+    assert!(error.contains("broken.png"), "{error}");
+}
+
+#[test]
+fn the_windows_resource_names_icon_one_and_the_product_and_its_version() {
+    let script = build::windows_resource(
+        Path::new(r"C:\out\app.ico"),
+        "Lab \"Notes\" Pro",
+        "1.2.3-beta.4",
+    );
+    for line in [
+        "#pragma code_page(65001)",
+        r#"1 ICON "C:\\out\\app.ico""#,
+        "FILEVERSION 1,2,3,0",
+        "PRODUCTVERSION 1,2,3,0",
+        r#"            VALUE "FileDescription", "Lab ""Notes"" Pro""#,
+        r#"            VALUE "FileVersion", "1.2.3-beta.4""#,
+        r#"            VALUE "ProductName", "Lab ""Notes"" Pro""#,
+        r#"            VALUE "ProductVersion", "1.2.3-beta.4""#,
+    ] {
+        assert!(
+            script.lines().any(|got| got == line),
+            "{line:?} in\n{script}"
+        );
+    }
+    // The config has no company, so the resource names none.
+    assert!(!script.contains("CompanyName"), "{script}");
+    let short = build::windows_resource(Path::new("app.ico"), "Lab", "7");
+    assert!(
+        short.lines().any(|line| line == "FILEVERSION 7,0,0,0"),
+        "{short}"
+    );
 }

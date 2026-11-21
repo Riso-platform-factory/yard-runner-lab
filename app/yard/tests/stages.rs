@@ -6,10 +6,13 @@ use std::{
 };
 
 fn repository() -> PathBuf {
+    // Not canonicalized: on Windows that gives a `\\?\` path, and the paths
+    // of `cargo metadata`, which are compared with this one, have none.
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
+        .ancestors()
+        .nth(2)
         .expect("the repository root exists")
+        .to_path_buf()
 }
 
 /// Cargo resolves workspace globs, crate names, and dependency aliases for us.
@@ -101,10 +104,15 @@ fn relative(path: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// FNV-1a, 64 bit, of a file's bytes.
+/// FNV-1a, 64 bit, of a file's bytes, with each CRLF read as LF, so that a
+/// Windows checkout, where git writes CRLF, gives the same fingerprint.
 fn fingerprint(path: &Path) -> String {
+    let bytes = fs::read(path).expect("the file can be read");
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in fs::read(path).expect("the file can be read") {
+    for (index, &byte) in bytes.iter().enumerate() {
+        if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            continue;
+        }
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }

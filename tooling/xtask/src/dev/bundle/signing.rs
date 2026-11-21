@@ -412,6 +412,7 @@ fn keychain_exists(keychain: &Path) -> bool {
 /// reaches only xtask, which stops between steps, and never kills the
 /// keychain's set-up or clean-up half-way.
 fn security() -> Command {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut command = Command::new("security");
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
@@ -537,6 +538,7 @@ fn private_folder() -> io::Result<PathBuf> {
     loop {
         let attempt = NEXT.fetch_add(1, Ordering::Relaxed);
         let folder = base.join(format!("yard-signing.{}-{attempt}", std::process::id()));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);

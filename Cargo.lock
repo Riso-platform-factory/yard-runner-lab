@@ -7861,6 +7861,7 @@ name = "yard"
 version = "0.1.0"
 dependencies = [
  "command_palette",
+ "embed-resource",
  "gpui",
  "gpui_platform",
  "image",

@@ -32,7 +32,7 @@ impl tracing::field::Visit for Fields {
         use std::fmt::Write;
         let value = format!("{value:?}");
         let value = match field.name() {
-            "path" => value.rsplit('/').next().unwrap().to_owned(),
+            "path" => value.rsplit(['/', '\\']).next().unwrap().to_owned(),
             _ => value,
         };
         write!(self.0, " {}={value}", field.name()).unwrap();
