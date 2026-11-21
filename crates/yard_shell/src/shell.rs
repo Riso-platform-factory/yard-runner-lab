@@ -7073,6 +7073,25 @@ fn create_shell(window: &mut Window, cx: &mut App, saved: Option<&SessionWindow>
     }
     register_shell_states(cx);
     super::session::window_opened(window, cx);
+    // A request to close the window, from its close button or the system,
+    // removes it through GPUI, as Zed does: the platform window is then
+    // destroyed only after GPUI has let go of it, so nothing reads a window
+    // that is gone.
+    // Zed removes it once the request has returned, and so does YARD.
+    window.on_window_should_close(cx, move |window, cx| {
+        let group = tracing::info_span!("window-close-request", window = id.as_u64());
+        let _group = group.enter();
+        tracing::debug!("close requested");
+        let group = group.clone();
+        window
+            .spawn(cx, async move |cx| {
+                let _group = group.enter();
+                tracing::debug!("removing the window");
+                cx.update(|window, _| window.remove_window()).ok();
+            })
+            .detach();
+        false
+    });
     let pending_states = state_window_opened(
         cx,
         window.window_handle(),

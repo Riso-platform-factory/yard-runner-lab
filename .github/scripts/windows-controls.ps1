@@ -57,7 +57,7 @@ function Rect($h) { $r = New-Object W+RECT; [W]::GetWindowRect($h, [ref]$r) | Ou
 
 $exe = (Resolve-Path target\debug\yard.exe).Path
 $env:YARD_HOME = "$env:RUNNER_TEMP\controls-home"
-$env:YARD_LIFECYCLE = "trace"
+$env:YARD_LIFECYCLE = "info,yard_ui=debug,yard_shell=debug"
 $p = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput controls-app.log -RedirectStandardError controls-app-err.log
 Start-Sleep 15
 $p.Refresh(); $h = $p.MainWindowHandle
@@ -84,6 +84,9 @@ $bb = Buttons $h; Say "close at $($bb.close -join ','), max at $($bb.max -join '
 # Drag first, before any click on the window.
 $before = State $h; $b = Buttons $h; [W]::Drag($b.bar[0], $b.bar[1], 120, 60); Start-Sleep 2; Say "first drag bar: before [$before] after [$(State $h)]"
 [W]::MoveWindow($h, 100, 80, 800, 600, $true) | Out-Null; Start-Sleep 1
+# Right-click on the bar opens the system menu.
+$b = Buttons $h; [W]::RightClick($b.bar[0], $b.bar[1]); Start-Sleep 2; Shot "controls-menu.png"; Say "right-click bar: screenshot controls-menu.png"
+[System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep 1
 
 # Hover over close, for a screenshot of the red hover.
 $b = Buttons $h; [W]::SetCursorPos($b.close[0], $b.close[1]) | Out-Null; Start-Sleep 1; Shot "controls-hover-close.png"
@@ -92,11 +95,8 @@ $b = Buttons $h; [W]::Click($b.max[0], $b.max[1]); Start-Sleep 2; Say "after max
 $b = Buttons $h; [W]::Click($b.max[0], $b.max[1]); Start-Sleep 2; Say "after restore button: $(State $h)"
 $b = Buttons $h; [W]::Click($b.bar[0], $b.bar[1]); Start-Sleep -Milliseconds 80; [W]::Click($b.bar[0], $b.bar[1]); Start-Sleep 2; Say "after double-click: $(State $h)"
 $b = Buttons $h; [W]::Click($b.bar[0], $b.bar[1]); Start-Sleep -Milliseconds 80; [W]::Click($b.bar[0], $b.bar[1]); Start-Sleep 2; Say "after second double-click: $(State $h)"
-Say "drag starts at $(Get-Date -Format HH:mm:ss.fff)"
-$before = State $h; $b = Buttons $h; [W]::Drag($b.bar[0], $b.bar[1], 120, 60); Start-Sleep 2; Say "drag bar: before [$before] after [$(State $h)]"
+$before = State $h; $b = Buttons $h; [W]::Drag($b.bar[0], $b.bar[1], 120, 60); Start-Sleep 2; Say "drag bar after the double-clicks: before [$before] after [$(State $h)]"
 $before = State $h; $r = Rect $h; [W]::Drag($r.R - 2, $r.T + 300, 80, 0); Start-Sleep 2; Say "drag right edge: before [$before] after [$(State $h)]"
-$b = Buttons $h; [W]::RightClick($b.bar[0], $b.bar[1]); Start-Sleep 2; Shot "controls-menu.png"; Say "right-click bar: screenshot controls-menu.png"
-[System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep 1
 $b = Buttons $h; [W]::Click($b.min[0], $b.min[1]); Start-Sleep 2; Say "after minimize button: $(State $h)"
 [W]::ShowWindow($h, 9) | Out-Null; [W]::SetForegroundWindow($h) | Out-Null; Start-Sleep 2; Say "after restore from taskbar: $(State $h)"
 $b = Buttons $h; [W]::Click($b.close[0], $b.close[1]); Start-Sleep 4
@@ -134,3 +134,4 @@ $before = State $gh; [W]::Drag($o.X + 300, $o.Y + 16, 120, 60); Start-Sleep 2; S
 Stop-Process -Id $g.Id -ErrorAction SilentlyContinue
 
 Copy-Item "$env:RUNNER_TEMP\controls-home\logs\yard.log" controls-yard.log -ErrorAction SilentlyContinue
+Say "ERROR lines in yard.log: $((Select-String -Path controls-yard.log -Pattern ' ERROR ').Count)"
