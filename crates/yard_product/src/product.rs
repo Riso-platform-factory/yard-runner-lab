@@ -86,6 +86,13 @@ pub fn file_name(name: &str) -> String {
     file_name
 }
 
+/// The name of the one instance's mutex and pipe on Windows, from the
+/// identifier alone, so that the installer's `AppMutex` names the mutex the
+/// app creates.
+pub fn instance_name(identifier: &str) -> String {
+    format!("{identifier}-instance")
+}
+
 /// At least two labels separated by dots, each of ASCII letters, digits, and
 /// `-`, not starting or ending with `-`, as macOS asks of a bundle identifier.
 /// The build config is checked with this rule, so the build and the product

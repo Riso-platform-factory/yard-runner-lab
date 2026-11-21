@@ -4,8 +4,9 @@
 //!
 //! The request format and its handling are the same on every system; only the
 //! transport differs. On Linux it is a Unix datagram socket in a private
-//! folder, as in Zed's `listen_for_cli_connections`. Other systems run without
-//! one instance until they have a transport.
+//! folder, as in Zed's `listen_for_cli_connections`. On Windows it is a named
+//! mutex and a named pipe, as in Zed's `windows_only_instance`. Other systems
+//! run without one instance.
 
 use futures::StreamExt as _;
 use gpui::App;
@@ -117,6 +118,28 @@ fn is_url(argument: &str, scheme: &str) -> bool {
             .is_some_and(|(prefix, _)| prefix.eq_ignore_ascii_case(scheme))
 }
 
+/// The name of the one instance's mutex and pipe on Windows: the
+/// installer's [`yard_product::instance_name`] when the directories are the
+/// platform's, and otherwise that name with a hash of the data folder, so
+/// that a run with a home of its own never meets the installed app, nor a
+/// run with another home.
+pub fn instance_name(paths: &yard_paths::Paths, identifier: &str) -> String {
+    let name = yard_product::instance_name(identifier);
+    if paths.origin() == yard_paths::Origin::Platform {
+        return name;
+    }
+    // FNV-1a, which gives the same hash in every build.
+    let hash = paths
+        .data_dir()
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    format!("{name}-{hash:016x}")
+}
+
 /// What [`check_instance`] found.
 #[derive(Debug)]
 pub enum Instance {
@@ -137,7 +160,9 @@ pub enum Instance {
 pub struct InstanceListener {
     #[cfg(unix)]
     inner: unix::Listener,
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    inner: windows::Listener,
+    #[cfg(not(any(unix, windows)))]
     never: std::convert::Infallible,
 }
 
@@ -145,9 +170,11 @@ pub struct InstanceListener {
 /// already running, or, when none runs, makes this start the one instance.
 /// The other arguments are never sent; with no URL, the running instance
 /// only comes to the front. Returns the URLs too, for this start to open
-/// when it is the one instance.
+/// when it is the one instance. Windows names the instance from the
+/// product's `identifier`, as [`instance_name`] does.
 pub fn start_instance(
     paths: &yard_paths::Paths,
+    identifier: &str,
     arguments: impl IntoIterator<Item = std::ffi::OsString>,
     scheme: &str,
 ) -> (Instance, Vec<String>) {
@@ -157,29 +184,52 @@ pub fn start_instance(
         .map(|argument| argument.into_string().unwrap_or_default())
         .collect();
     let urls = argument_urls(&arguments, scheme);
-    (check_instance(paths, &urls), urls)
+    (check_instance(paths, identifier, &urls), urls)
 }
 
 /// Hands the arguments to the instance already running, or, when none runs,
 /// makes this start the one instance.
-pub fn check_instance(paths: &yard_paths::Paths, arguments: &[String]) -> Instance {
-    let socket = paths.instance_socket();
-    let _group = tracing::info_span!("instance-check", socket = %socket.display()).entered();
-    #[cfg(target_os = "linux")]
+pub fn check_instance(
+    paths: &yard_paths::Paths,
+    identifier: &str,
+    arguments: &[String],
+) -> Instance {
+    #[cfg(windows)]
     {
-        unix::check(
-            &paths.instance_dir(),
-            &socket,
-            &paths.instance_lock(),
-            arguments,
-        )
+        // The group names the pipe, as it names the socket on Linux.
+        let name = instance_name(paths, identifier);
+        match windows::Names::new(&name) {
+            Ok(names) => {
+                let _group = tracing::info_span!("instance-check", socket = %names.pipe).entered();
+                windows::check(&names, arguments)
+            }
+            Err(reason) => {
+                let _group = tracing::info_span!("instance-check", socket = %name).entered();
+                windows::alone(reason)
+            }
+        }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(windows))]
     {
-        let _ = arguments;
-        let reason = "no single instance on this system";
-        tracing::debug!(reason);
-        Instance::Alone(reason.into())
+        let _ = identifier;
+        let socket = paths.instance_socket();
+        let _group = tracing::info_span!("instance-check", socket = %socket.display()).entered();
+        #[cfg(target_os = "linux")]
+        {
+            unix::check(
+                &paths.instance_dir(),
+                &socket,
+                &paths.instance_lock(),
+                arguments,
+            )
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = arguments;
+            let reason = "no single instance on this system";
+            tracing::debug!(reason);
+            Instance::Alone(reason.into())
+        }
     }
 }
 
@@ -189,7 +239,9 @@ pub fn check_instance(paths: &yard_paths::Paths, arguments: &[String]) -> Instan
 pub fn serve_instance_requests(cx: &mut App, listener: InstanceListener, scheme: &str) {
     #[cfg(unix)]
     unix::serve(cx, listener.inner, scheme);
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    windows::serve(cx, listener.inner, scheme);
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (cx, scheme);
         match listener.never {}
@@ -248,11 +300,16 @@ fn activate_main_window(cx: &mut App) {
         tracing::debug!("the main window closed meanwhile");
         return;
     }
-    // TODO(linux-app-activate): GPUI's `activate` does nothing on Linux, and
-    // the window manager or compositor decides whether `activate_window`
-    // takes the focus: on X11 it sends `_NET_ACTIVE_WINDOW`, and on Wayland
-    // it asks for an `xdg_activation_v1` token, granted only with a recent
-    // input serial. A GPUI that implements `activate` on Linux unblocks it.
+    // GPUI's `activate` does nothing on Linux or Windows; there,
+    // `activate_window` alone asks for the focus. On Windows it restores a
+    // minimized window and asks for the foreground. The later start called
+    // `AllowSetForegroundWindow` for this process, and Windows may still
+    // refuse it.
+    // TODO(linux-app-activate): on Linux the window manager or compositor
+    // decides whether `activate_window` takes the focus: on X11 it sends
+    // `_NET_ACTIVE_WINDOW`, and on Wayland it asks for an `xdg_activation_v1`
+    // token, granted only with a recent input serial. A GPUI that implements
+    // `activate` on Linux unblocks it.
     cx.activate(true);
     tracing::debug!("activation requested");
 }
@@ -714,5 +771,761 @@ mod unix {
     }
 }
 
+#[cfg(windows)]
+mod windows {
+    use super::{
+        Instance, InstanceListener, MAX_REQUEST_LEN, RequestError, encode_request,
+        handle_instance_requests,
+    };
+    use ::windows::{
+        Win32::{
+            Foundation::{
+                CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_BROKEN_PIPE,
+                ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_MORE_DATA, ERROR_NO_DATA,
+                ERROR_OPERATION_ABORTED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
+                ERROR_PIPE_NOT_CONNECTED, GetLastError, HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0,
+                WAIT_TIMEOUT, WIN32_ERROR,
+            },
+            Security::{
+                Authorization::{
+                    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+                    SDDL_REVISION_1,
+                },
+                GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+                TOKEN_USER, TokenUser,
+            },
+            Storage::FileSystem::{
+                CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED,
+                FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_SHARE_NONE, OPEN_EXISTING,
+                PIPE_ACCESS_INBOUND, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+                WriteFile,
+            },
+            System::{
+                IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED},
+                Pipes::{
+                    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe,
+                    GetNamedPipeServerProcessId, PIPE_READMODE_MESSAGE, PIPE_REJECT_REMOTE_CLIENTS,
+                    PIPE_TYPE_MESSAGE, PIPE_WAIT, WaitNamedPipeW,
+                },
+                RemoteDesktop::ProcessIdToSessionId,
+                Threading::{
+                    CreateEventW, CreateMutexW, GetCurrentProcess, GetCurrentProcessId, OpenMutexW,
+                    OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+                    SYNCHRONIZATION_SYNCHRONIZE, WaitForSingleObject,
+                },
+            },
+            UI::WindowsAndMessaging::AllowSetForegroundWindow,
+        },
+        core::{HSTRING, PWSTR},
+    };
+    use futures::channel::mpsc::UnboundedReceiver;
+    use gpui::App;
+    use std::time::{Duration, Instant};
+
+    /// How long a second start waits for the running instance's pipe before
+    /// it gives up.
+    const SEND_TIMEOUT: Duration = Duration::from_secs(2);
+
+    /// How long a second start waits before it looks again for a pipe that
+    /// the starting instance has not created yet.
+    const RETRY: Duration = Duration::from_millis(50);
+
+    /// How long a second start waits before it looks again for the mutex of
+    /// an instance that closed its pipe.
+    const EXIT_POLL: Duration = Duration::from_millis(20);
+
+    /// The names of the instance's mutex and pipe.
+    #[derive(Debug, Clone)]
+    pub(super) struct Names {
+        /// The mutex, per logon session, that the installer looks for too.
+        pub(super) mutex: String,
+        /// The pipe, named with the session, since pipe names are shared by
+        /// every user of the machine.
+        pub(super) pipe: String,
+    }
+
+    impl Names {
+        pub(super) fn new(name: &str) -> Result<Self, String> {
+            let mut session = 0;
+            // SAFETY: `session` is a valid place for the id, and the process
+            // id is this process's.
+            unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) }
+                .map_err(|error| format!("this process's session is unknown ({error})"))?;
+            Ok(Self {
+                mutex: format!(r"Local\{name}"),
+                pipe: format!(r"\\.\pipe\{name}-{session}"),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    pub(super) struct Listener {
+        pub(super) requests: UnboundedReceiver<Vec<u8>>,
+    }
+
+    /// A handle this module opened, closed when dropped.
+    pub(super) struct Handle(pub(super) HANDLE);
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            // SAFETY: the handle was opened by this module and is closed once.
+            let _ = unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    /// The server end of the instance pipe, which the listener's thread owns.
+    pub(super) struct Pipe(Handle);
+
+    fn is(error: &::windows::core::Error, code: WIN32_ERROR) -> bool {
+        error.code() == code.to_hresult()
+    }
+
+    /// Whether `error` says the other end of the pipe closed it.
+    fn is_disconnected(error: &::windows::core::Error) -> bool {
+        is(error, ERROR_NO_DATA)
+            || is(error, ERROR_BROKEN_PIPE)
+            || is(error, ERROR_PIPE_NOT_CONNECTED)
+    }
+
+    /// Creates the instance mutex: if it is new, this start is the one
+    /// instance and listens on the pipe; if it exists, an instance runs, and
+    /// this start hands it the arguments. If that instance ends before it
+    /// is reached, the mutex is created again, within the same
+    /// [`SEND_TIMEOUT`].
+    pub(super) fn check(names: &Names, arguments: &[String]) -> Instance {
+        let request = encode_request(arguments);
+        let deadline = Instant::now() + SEND_TIMEOUT;
+        let mutex_name = HSTRING::from(&names.mutex);
+        loop {
+            // SAFETY: the name is a valid string, alive until after the
+            // last error is read, and the mutex takes the default security
+            // of this process.
+            let created = unsafe { CreateMutexW(None, false, &mutex_name) };
+            // SAFETY: reads the error `CreateMutexW` left on this thread.
+            let status = unsafe { GetLastError() };
+            let sent = match created {
+                Ok(mutex) if status != ERROR_ALREADY_EXISTS => {
+                    return listen(names, Handle(mutex));
+                }
+                Ok(mutex) => {
+                    drop(Handle(mutex));
+                    send(&names.pipe, &mutex_name, &request, deadline)
+                }
+                // A mutex of a process this one may not open, such as the
+                // same user's elevated instance: it runs, so the pipe is
+                // tried.
+                Err(error) if is(&error, ERROR_ACCESS_DENIED) => {
+                    send(&names.pipe, &mutex_name, &request, deadline)
+                }
+                Err(error) => {
+                    return alone(format!("the instance mutex cannot be created ({error})"));
+                }
+            };
+            match sent {
+                Sent::Done(instance) => return instance,
+                Sent::Gone => tracing::debug!("the running instance ended, looking again"),
+            }
+        }
+    }
+
+    /// Makes this start, which created `mutex`, the one instance.
+    fn listen(names: &Names, mutex: Handle) -> Instance {
+        let pipe = match create_pipe(&names.pipe) {
+            Ok(pipe) => pipe,
+            Err(reason) => {
+                // Without a pipe the mutex would only make later starts wait
+                // for nothing.
+                drop(mutex);
+                tracing::debug!("instance mutex released");
+                return alone(reason);
+            }
+        };
+        // The listener's thread holds the mutex while it listens, which is
+        // as long as this process runs unless the pipe fails, so that the
+        // installer's `AppMutex` sees the app.
+        let requests = match receive(pipe, mutex) {
+            Ok(requests) => requests,
+            Err(error) => {
+                tracing::debug!("instance mutex released");
+                let reason = format!("the instance listener did not start ({error})");
+                log::error!("{reason}; running without a single instance");
+                return Instance::Alone(reason);
+            }
+        };
+        tracing::debug!("listening");
+        Instance::Listening(InstanceListener {
+            inner: Listener { requests },
+        })
+    }
+
+    pub(super) fn alone(reason: String) -> Instance {
+        log::warn!("{reason}; running without a single instance");
+        Instance::Alone(reason)
+    }
+
+    fn refused(error: String) -> Instance {
+        let reason = format!("the running instance was not reached: {error}");
+        log::warn!("{reason}");
+        Instance::Refused(reason)
+    }
+
+    /// The user `process` runs as, as a SID string.
+    fn user_of(process: HANDLE) -> ::windows::core::Result<String> {
+        let mut token = HANDLE::default();
+        // SAFETY: `process` may be queried, and `token` receives a handle
+        // that is closed below.
+        unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) }?;
+        let token = Handle(token);
+        let mut len = 0;
+        // SAFETY: asks only for the size, which fails with that size.
+        let _ = unsafe { GetTokenInformation(token.0, TokenUser, None, 0, &mut len) };
+        // `u64`s, so the `TOKEN_USER` at the start is aligned.
+        let mut buffer = vec![0_u64; (len as usize).div_ceil(8)];
+        // SAFETY: `buffer` holds at least `len` writable bytes.
+        unsafe {
+            GetTokenInformation(
+                token.0,
+                TokenUser,
+                Some(buffer.as_mut_ptr().cast()),
+                len,
+                &mut len,
+            )
+        }?;
+        // SAFETY: `GetTokenInformation` wrote a `TOKEN_USER` at the start of
+        // `buffer`, whose SID points into `buffer`, still alive below.
+        let sid = unsafe { (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+        let mut string = PWSTR::null();
+        // SAFETY: `sid` is valid, and `string` receives a string freed below.
+        unsafe { ConvertSidToStringSidW(sid, &mut string) }?;
+        // SAFETY: `ConvertSidToStringSidW` wrote a NUL-terminated string.
+        let user = String::from_utf16_lossy(unsafe { string.as_wide() });
+        // SAFETY: `ConvertSidToStringSidW` allocated the string with
+        // `LocalAlloc`, and nothing uses it after this.
+        unsafe { LocalFree(Some(HLOCAL(string.0.cast()))) };
+        Ok(user)
+    }
+
+    /// The user this process runs as.
+    fn own_user() -> ::windows::core::Result<String> {
+        // SAFETY: `GetCurrentProcess` returns a pseudo handle, which needs no
+        // closing.
+        user_of(unsafe { GetCurrentProcess() })
+    }
+
+    /// Creates the first and only instance of the pipe, which only this
+    /// user and the system may open, and no other machine.
+    pub(super) fn create_pipe(name: &str) -> Result<Pipe, String> {
+        let user = own_user()
+            .map_err(|error| format!("the instance pipe cannot be made private ({error})"))?;
+        // A protected DACL, so that nothing is inherited into it.
+        let sddl = HSTRING::from(format!("D:P(A;;GA;;;{user})(A;;GA;;;SY)"));
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `sddl` is a valid string, and `descriptor` receives memory
+        // freed below.
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                &sddl,
+                SDDL_REVISION_1,
+                &mut descriptor,
+                None,
+            )
+        }
+        .map_err(|error| format!("the instance pipe cannot be made private ({error})"))?;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: false.into(),
+        };
+        let name = HSTRING::from(name);
+        // SAFETY: the name is a valid string, alive until after the last
+        // error is read, and `attributes` points to a descriptor alive until
+        // after the call.
+        let pipe = unsafe {
+            CreateNamedPipeW(
+                &name,
+                PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                0,
+                MAX_REQUEST_LEN as u32,
+                0,
+                Some(&attributes),
+            )
+        };
+        let error = ::windows::core::Error::from_thread();
+        // SAFETY: the descriptor was allocated with `LocalAlloc`, and the
+        // pipe keeps a copy of its own.
+        unsafe { LocalFree(Some(HLOCAL(descriptor.0))) };
+        if pipe.is_invalid() {
+            return Err(format!("the instance pipe cannot be created ({error})"));
+        }
+        Ok(Pipe(Handle(pipe)))
+    }
+
+    /// What came of [`send`].
+    pub(super) enum Sent {
+        Done(Instance),
+        /// The mutex is gone: the instance ended before it took the
+        /// request.
+        Gone,
+    }
+
+    /// Whether the mutex named `name` exists.
+    fn mutex_exists(name: &HSTRING) -> bool {
+        // SAFETY: the name is a valid string, and the handle is closed when
+        // dropped.
+        match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, name) } {
+            Ok(mutex) => {
+                drop(Handle(mutex));
+                true
+            }
+            Err(error) => !is(&error, ERROR_FILE_NOT_FOUND),
+        }
+    }
+
+    fn timed_out(busy: Option<&str>) -> Instance {
+        let seconds = SEND_TIMEOUT.as_secs();
+        refused(match busy {
+            Some(error) => {
+                format!(
+                    "it did not answer within {seconds} seconds (the pipe stayed busy: {error})"
+                )
+            }
+            None => format!("it did not answer within {seconds} seconds"),
+        })
+    }
+
+    /// Hands the request to the instance listening on `pipe` before
+    /// `deadline`: opening the pipe, while it does not exist yet or is busy,
+    /// checking its user, and writing.
+    pub(super) fn send(
+        pipe: &str,
+        mutex: &HSTRING,
+        request: &Result<Vec<u8>, RequestError>,
+        deadline: Instant,
+    ) -> Sent {
+        let request = match request {
+            Ok(request) => request,
+            Err(error) => return Sent::Done(refused(error.to_string())),
+        };
+        let name = HSTRING::from(pipe);
+        let mut busy = None;
+        let client = loop {
+            if Instant::now() >= deadline {
+                return Sent::Done(timed_out(busy.as_deref()));
+            }
+            // SAFETY: the name is a valid string, and the handle is closed
+            // when `client` drops. The server may only identify this
+            // process, never act as it.
+            let opened = unsafe {
+                CreateFileW(
+                    &name,
+                    (FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES).0,
+                    FILE_SHARE_NONE,
+                    None,
+                    OPEN_EXISTING,
+                    SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION | FILE_FLAG_OVERLAPPED,
+                    None,
+                )
+            };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match opened {
+                Ok(client) => break Handle(client),
+                Err(error) if is(&error, ERROR_FILE_NOT_FOUND) => {
+                    if !mutex_exists(mutex) {
+                        return Sent::Gone;
+                    }
+                    tracing::debug!("no pipe yet, the instance may be starting");
+                    std::thread::sleep(RETRY.min(remaining));
+                }
+                Err(error) if is(&error, ERROR_PIPE_BUSY) => {
+                    tracing::debug!("the pipe is busy with another start");
+                    let wait = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
+                    // SAFETY: the name is a valid string.
+                    if let Err(error) = unsafe { WaitNamedPipeW(&name, wait) }.ok() {
+                        tracing::debug!("the pipe stayed busy ({error})");
+                        busy = Some(error.to_string());
+                    }
+                }
+                Err(error) => {
+                    return Sent::Done(refused(format!("the pipe cannot be opened ({error})")));
+                }
+            }
+        };
+        hand_over(client, mutex, request, deadline)
+    }
+
+    /// Checks that the server of `client` runs as this user, lets it take
+    /// the foreground, and writes the request, all before `deadline`. If the
+    /// server cannot be looked up, or the write is refused at once, and the
+    /// mutex is gone, the instance ended before it took the request.
+    pub(super) fn hand_over(
+        client: Handle,
+        mutex: &HSTRING,
+        request: &[u8],
+        deadline: Instant,
+    ) -> Sent {
+        // An instance that disconnected may be exiting: the system closes
+        // its handles in any order, so its mutex may outlive its pipe for a
+        // moment, and is waited for until the deadline.
+        let ended = |reason: String, disconnected: bool| loop {
+            if !mutex_exists(mutex) {
+                return Sent::Gone;
+            }
+            if !disconnected || Instant::now() >= deadline {
+                return Sent::Done(refused(reason));
+            }
+            std::thread::sleep(EXIT_POLL);
+        };
+        let mut server = 0;
+        // SAFETY: `client` is an open pipe, and `server` a valid place.
+        if let Err(error) = unsafe { GetNamedPipeServerProcessId(client.0, &mut server) } {
+            let disconnected = is_disconnected(&error);
+            return ended(
+                format!("the pipe's process is unknown ({error})"),
+                disconnected,
+            );
+        }
+        // URLs may hold secrets: they go only to a process of this user.
+        let own = match own_user() {
+            Ok(own) => own,
+            Err(error) => {
+                return Sent::Done(refused(format!("this process's user is unknown ({error})")));
+            }
+        };
+        match server_user(server) {
+            Ok(user) if user == own => {}
+            Ok(_) => return Sent::Done(refused("the pipe belongs to another user".into())),
+            // An elevated process, for one, does not let others read its
+            // token; a process that ended cannot be looked up.
+            Err(error) => {
+                return ended(
+                    format!("the pipe's owner could not be checked ({error})"),
+                    false,
+                );
+            }
+        }
+        // Windows lets a process take the foreground only from the one that
+        // has it, or one that this allowed, and may refuse it even then.
+        // SAFETY: takes a process id only.
+        if let Err(error) = unsafe { AllowSetForegroundWindow(server) } {
+            tracing::debug!("the running instance may not take the foreground ({error})");
+        }
+        match write(client, request, deadline) {
+            Written::Whole(written) if written == request.len() => {
+                tracing::debug!(bytes = request.len(), "sent to the running instance");
+                Sent::Done(Instance::Forwarded)
+            }
+            Written::Whole(written) => Sent::Done(refused(format!(
+                "only {written} of {} bytes were sent",
+                request.len()
+            ))),
+            Written::NotStarted {
+                reason,
+                disconnected,
+            } => ended(reason, disconnected),
+            Written::Failed(reason) => Sent::Done(refused(reason)),
+        }
+    }
+
+    /// What came of [`write`].
+    enum Written {
+        /// The write ended, with this many bytes.
+        Whole(usize),
+        /// Nothing was handed to the pipe; `disconnected` when the instance
+        /// had closed it.
+        NotStarted { reason: String, disconnected: bool },
+        /// The write started, and failed or did not end in time.
+        Failed(String),
+    }
+
+    /// An overlapped write, with what it uses kept together on the heap, so
+    /// that a write still pending at the deadline can be left to the system.
+    struct Write {
+        overlapped: OVERLAPPED,
+        buffer: Vec<u8>,
+        event: Handle,
+    }
+
+    /// Writes `request` to `client`, opened for overlapped writes, as one
+    /// message, and gives up at `deadline`, so that an instance that does
+    /// not read never holds this start up.
+    fn write(client: Handle, request: &[u8], deadline: Instant) -> Written {
+        let not_in_time = || {
+            format!(
+                "the running instance did not take the request within {} seconds",
+                SEND_TIMEOUT.as_secs()
+            )
+        };
+        // SAFETY: a manual-reset event without a name, closed when dropped.
+        let event = match unsafe { CreateEventW(None, true, false, None) } {
+            Ok(event) => Handle(event),
+            Err(error) => {
+                return Written::NotStarted {
+                    reason: format!("no event to wait on ({error})"),
+                    disconnected: false,
+                };
+            }
+        };
+        let mut write = Box::new(Write {
+            overlapped: OVERLAPPED {
+                hEvent: event.0,
+                ..Default::default()
+            },
+            buffer: request.to_vec(),
+            event,
+        });
+        let wait = |deadline: Instant| {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            remaining.as_millis().min(u32::MAX as u128) as u32
+        };
+        if Instant::now() >= deadline {
+            return Written::NotStarted {
+                reason: not_in_time(),
+                disconnected: false,
+            };
+        }
+        // Why the wait ended early, kept for a cancel that ends the write.
+        let mut cancelled = None;
+        // SAFETY: `write` holds the buffer and the `OVERLAPPED` until the
+        // write ends, or for ever if it may not have ended.
+        let started = unsafe {
+            WriteFile(
+                client.0,
+                Some(&write.buffer),
+                None,
+                Some(&raw mut write.overlapped),
+            )
+        };
+        match started {
+            Ok(()) => {}
+            Err(error) if is(&error, ERROR_IO_PENDING) => {
+                // SAFETY: the event is a valid handle.
+                let waited = unsafe { WaitForSingleObject(write.event.0, wait(deadline)) };
+                if waited != WAIT_OBJECT_0 {
+                    let reason = if waited == WAIT_TIMEOUT {
+                        not_in_time()
+                    } else {
+                        let error = ::windows::core::Error::from_thread();
+                        format!("the write could not be waited for ({error})")
+                    };
+                    // SAFETY: cancels only this write.
+                    let _ = unsafe { CancelIoEx(client.0, Some(&raw const write.overlapped)) };
+                    // The deadline has passed, so the cancel is not waited
+                    // for. Unless the write ended already, the system may
+                    // still use the buffer and the `OVERLAPPED`: they and
+                    // both handles are leaked on purpose, in a start that is
+                    // about to exit.
+                    // SAFETY: the event is a valid handle.
+                    if unsafe { WaitForSingleObject(write.event.0, 0) } != WAIT_OBJECT_0 {
+                        Box::leak(write);
+                        std::mem::forget(client);
+                        return Written::Failed(reason);
+                    }
+                    // A write that ended during the cancel was delivered,
+                    // and counts.
+                    cancelled = Some(reason);
+                }
+            }
+            // Refused at once: nothing reached the pipe.
+            Err(error) => {
+                return Written::NotStarted {
+                    disconnected: is_disconnected(&error),
+                    reason: error.to_string(),
+                };
+            }
+        }
+        let mut written = 0;
+        // SAFETY: the write has ended, and `written` is a valid place.
+        match unsafe { GetOverlappedResult(client.0, &write.overlapped, &mut written, false) } {
+            Ok(()) => Written::Whole(written as usize),
+            Err(error) if is(&error, ERROR_OPERATION_ABORTED) => {
+                Written::Failed(cancelled.unwrap_or_else(not_in_time))
+            }
+            Err(error) => Written::Failed(error.to_string()),
+        }
+    }
+
+    /// The user the process `id` runs as.
+    fn server_user(id: u32) -> ::windows::core::Result<String> {
+        // SAFETY: opens the process for queries only; closed when dropped.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, id) }?;
+        let process = Handle(process);
+        user_of(process.0)
+    }
+
+    pub(super) fn serve(cx: &mut App, listener: Listener, scheme: &str) {
+        handle_instance_requests(cx, listener.requests, scheme);
+    }
+
+    /// How long the running instance waits for a start that connected to
+    /// send its request.
+    const READ_TIMEOUT: Duration = SEND_TIMEOUT;
+
+    /// The listener's thread owns what it uses: the pipe, its event, and
+    /// the instance mutex.
+    struct Listening {
+        pipe: Pipe,
+        event: Handle,
+        /// Held only to be closed when the listener ends.
+        _mutex: Handle,
+    }
+
+    // SAFETY: these handles may be used from any thread, and only the
+    // listener's thread uses them.
+    unsafe impl Send for Listening {}
+
+    /// Receives each message on the pipe on a thread of its own, and sends
+    /// it on, each in the group `instance-request`. A message larger than a
+    /// request may be, or one that does not come in time, is refused there.
+    /// The thread holds `mutex`, the instance's, for as long as it listens:
+    /// if the pipe fails for good, it closes the mutex, so that later starts
+    /// run on their own instead of waiting for it.
+    pub(super) fn receive(
+        pipe: Pipe,
+        mutex: Handle,
+    ) -> std::io::Result<UnboundedReceiver<Vec<u8>>> {
+        // SAFETY: a manual-reset event without a name, closed when dropped.
+        let event = unsafe { CreateEventW(None, true, false, None) }
+            .map(Handle)
+            .map_err(std::io::Error::other)?;
+        let listening = Listening {
+            pipe,
+            event,
+            _mutex: mutex,
+        };
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        std::thread::Builder::new()
+            .name("instance-listener".into())
+            .spawn(move || {
+                let listening = listening;
+                let handle = (listening.pipe.0).0;
+                let event = &listening.event;
+                let stopped = |error: &dyn std::fmt::Display| {
+                    log::warn!(
+                        "the instance pipe stopped receiving ({error}); later starts run on their own"
+                    );
+                };
+                let mut buffer = vec![0; MAX_REQUEST_LEN];
+                loop {
+                    if let Err(error) = connect(handle, event) {
+                        // Whatever state the pipe is in, disconnecting
+                        // makes it ready to listen again.
+                        // SAFETY: `handle` is the server end of the pipe,
+                        // which only this thread uses.
+                        if let Err(error) = unsafe { DisconnectNamedPipe(handle) } {
+                            // Dropping `listening` closes the mutex.
+                            return stopped(&error);
+                        }
+                        log::warn!("a start could not connect to the instance pipe ({error})");
+                        std::thread::sleep(RETRY);
+                        continue;
+                    }
+                    let _group = tracing::info_span!("instance-request").entered();
+                    let request = read_request(handle, event, &mut buffer);
+                    // SAFETY: as above.
+                    if let Err(error) = unsafe { DisconnectNamedPipe(handle) } {
+                        return stopped(&error);
+                    }
+                    match request {
+                        Ok(Some(request)) => {
+                            if tx.unbounded_send(request).is_err() {
+                                return;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(reason) => {
+                            log::warn!("a request from another start was refused: {reason}");
+                        }
+                    }
+                }
+            })?;
+        Ok(rx)
+    }
+
+    /// Waits for the next start to connect. A start that connected, and
+    /// even one that wrote and closed, before this call counts as connected:
+    /// what it wrote is still there to read.
+    fn connect(pipe: HANDLE, event: &Handle) -> ::windows::core::Result<()> {
+        let mut overlapped = OVERLAPPED {
+            hEvent: event.0,
+            ..Default::default()
+        };
+        // SAFETY: `overlapped` stays alive until the connection is made,
+        // which is waited for below.
+        match unsafe { ConnectNamedPipe(pipe, Some(&raw mut overlapped)) } {
+            Ok(()) => Ok(()),
+            Err(error) if is(&error, ERROR_PIPE_CONNECTED) || is(&error, ERROR_NO_DATA) => Ok(()),
+            Err(error) if is(&error, ERROR_IO_PENDING) => {
+                let mut transferred = 0;
+                // SAFETY: waits until the connection is made.
+                unsafe { GetOverlappedResult(pipe, &overlapped, &mut transferred, true) }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Reads one message within [`READ_TIMEOUT`], or `None` when the start
+    /// closed the pipe without writing. A message larger than `buffer`,
+    /// which holds the largest request, is refused; disconnecting drops the
+    /// rest of it.
+    fn read_request(
+        pipe: HANDLE,
+        event: &Handle,
+        buffer: &mut [u8],
+    ) -> Result<Option<Vec<u8>>, String> {
+        let mut overlapped = OVERLAPPED {
+            hEvent: event.0,
+            ..Default::default()
+        };
+        // SAFETY: `buffer` and `overlapped` stay alive until the read ends,
+        // which is waited for below, also after a cancel.
+        let started = unsafe { ReadFile(pipe, Some(buffer), None, Some(&raw mut overlapped)) };
+        match started {
+            Ok(()) => {}
+            Err(error) if is(&error, ERROR_IO_PENDING) => {
+                let wait = READ_TIMEOUT.as_millis() as u32;
+                // SAFETY: the event is a valid handle.
+                if unsafe { WaitForSingleObject(event.0, wait) } != WAIT_OBJECT_0 {
+                    // The end of the cancel is waited for without a limit,
+                    // since the system may use `buffer` and `overlapped`
+                    // until then. This is the listener's own thread: it only
+                    // holds up later starts, which give up after their own
+                    // two seconds.
+                    // SAFETY: cancels only this read, whose end is waited
+                    // for below.
+                    let _ = unsafe { CancelIoEx(pipe, Some(&raw const overlapped)) };
+                }
+            }
+            Err(error) => return read_error(error),
+        }
+        let mut len = 0;
+        // SAFETY: waits until the read ends, then reads its result.
+        match unsafe { GetOverlappedResult(pipe, &overlapped, &mut len, true) } {
+            Ok(()) => Ok(Some(buffer[..len as usize].to_vec())),
+            Err(error) if is(&error, ERROR_OPERATION_ABORTED) => Err(format!(
+                "nothing came within {} seconds",
+                READ_TIMEOUT.as_secs()
+            )),
+            Err(error) => read_error(error),
+        }
+    }
+
+    fn read_error(error: ::windows::core::Error) -> Result<Option<Vec<u8>>, String> {
+        if is(&error, ERROR_BROKEN_PIPE) || is(&error, ERROR_NO_DATA) {
+            Ok(None)
+        } else if is(&error, ERROR_MORE_DATA) {
+            Err(format!(
+                "the request is more than the {MAX_REQUEST_LEN} bytes the running instance reads"
+            ))
+        } else {
+            Err(format!("the request cannot be read ({error})"))
+        }
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(all(test, windows))]
+mod windows_tests;
