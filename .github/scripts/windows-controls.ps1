@@ -97,3 +97,15 @@ $b = Buttons $h; [W]::Click($b.min[0], $b.min[1]); Start-Sleep 2; Say "after min
 $b = Buttons $h; [W]::Click($b.close[0], $b.close[1]); Start-Sleep 4
 Say "after close button: process exited=$($p.HasExited) exit=$(if ($p.HasExited) { $p.ExitCode } else { '-' })"
 if (-not $p.HasExited) { Stop-Process -Id $p.Id }
+
+# Control: the same drag and right-click on Notepad's system title bar.
+Say "== control: Notepad"
+$n = Start-Process notepad -PassThru; Start-Sleep 5
+$nh = (Get-Process -Id $n.Id).MainWindowHandle
+if ($nh -eq 0) { $nh = (Get-Process notepad | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1).MainWindowHandle }
+[W]::ShowWindow($nh, 9) | Out-Null; [W]::MoveWindow($nh, 100, 80, 800, 600, $true) | Out-Null; [W]::SetForegroundWindow($nh) | Out-Null; Start-Sleep 2
+$r = Rect $nh
+$before = State $nh; [W]::Drag($r.L + 300, $r.T + 15, 120, 60); Start-Sleep 2; Say "notepad drag bar: before [$before] after [$(State $nh)]"
+$r = Rect $nh; [W]::RightClick($r.L + 300, $r.T + 15); Start-Sleep 2; Shot "control-notepad-menu.png"
+[System.Windows.Forms.SendKeys]::SendWait("{ESC}")
+Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process

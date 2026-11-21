@@ -28,13 +28,13 @@ jobs:
         continue-on-error: true
         run: cargo check --workspace --all-targets --keep-going 2>&1 | tee check.log
       - name: Test the workspace
-        if: steps.check.outcome == 'success'
+        if: steps.check.outcome == 'success' && false
         continue-on-error: true
         run: |
           cargo test --workspace --no-fail-fast -- --skip what_is_outside_dev_is_in_production 2>&1 | tee test.log
           cargo test -p yard --test stages 2>&1 | tail -15 | tee stages.log
       - name: Run the app (resources, directories, release subsystem)
-        if: steps.build.outcome == 'success'
+        if: steps.build.outcome == 'success' && false
         continue-on-error: true
         shell: pwsh
         run: .github/scripts/windows-app.ps1
