@@ -782,8 +782,9 @@ mod windows {
             Foundation::{
                 CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_BROKEN_PIPE,
                 ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_MORE_DATA, ERROR_NO_DATA,
-                ERROR_OPERATION_ABORTED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GetLastError,
-                HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT, WIN32_ERROR,
+                ERROR_OPERATION_ABORTED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
+                ERROR_PIPE_NOT_CONNECTED, GetLastError, HANDLE, HLOCAL, LocalFree, WAIT_OBJECT_0,
+                WAIT_TIMEOUT, WIN32_ERROR,
             },
             Security::{
                 Authorization::{
@@ -829,6 +830,10 @@ mod windows {
     /// the starting instance has not created yet.
     const RETRY: Duration = Duration::from_millis(50);
 
+    /// How long a second start waits before it looks again for the mutex of
+    /// an instance that closed its pipe.
+    const EXIT_POLL: Duration = Duration::from_millis(20);
+
     /// The names of the instance's mutex and pipe.
     #[derive(Debug, Clone)]
     pub(super) struct Names {
@@ -873,6 +878,13 @@ mod windows {
 
     fn is(error: &::windows::core::Error, code: WIN32_ERROR) -> bool {
         error.code() == code.to_hresult()
+    }
+
+    /// Whether `error` says the other end of the pipe closed it.
+    fn is_disconnected(error: &::windows::core::Error) -> bool {
+        is(error, ERROR_NO_DATA)
+            || is(error, ERROR_BROKEN_PIPE)
+            || is(error, ERROR_PIPE_NOT_CONNECTED)
     }
 
     /// Creates the instance mutex: if it is new, this start is the one
@@ -1153,17 +1165,26 @@ mod windows {
         request: &[u8],
         deadline: Instant,
     ) -> Sent {
-        let ended = |reason: String| {
-            if mutex_exists(mutex) {
-                Sent::Done(refused(reason))
-            } else {
-                Sent::Gone
+        // An instance that disconnected may be exiting: the system closes
+        // its handles in any order, so its mutex may outlive its pipe for a
+        // moment, and is waited for until the deadline.
+        let ended = |reason: String, disconnected: bool| loop {
+            if !mutex_exists(mutex) {
+                return Sent::Gone;
             }
+            if !disconnected || Instant::now() >= deadline {
+                return Sent::Done(refused(reason));
+            }
+            std::thread::sleep(EXIT_POLL);
         };
         let mut server = 0;
         // SAFETY: `client` is an open pipe, and `server` a valid place.
         if let Err(error) = unsafe { GetNamedPipeServerProcessId(client.0, &mut server) } {
-            return ended(format!("the pipe's process is unknown ({error})"));
+            let disconnected = is_disconnected(&error);
+            return ended(
+                format!("the pipe's process is unknown ({error})"),
+                disconnected,
+            );
         }
         // URLs may hold secrets: they go only to a process of this user.
         let own = match own_user() {
@@ -1177,7 +1198,12 @@ mod windows {
             Ok(_) => return Sent::Done(refused("the pipe belongs to another user".into())),
             // An elevated process, for one, does not let others read its
             // token; a process that ended cannot be looked up.
-            Err(error) => return ended(format!("the pipe's owner could not be checked ({error})")),
+            Err(error) => {
+                return ended(
+                    format!("the pipe's owner could not be checked ({error})"),
+                    false,
+                );
+            }
         }
         // Windows lets a process take the foreground only from the one that
         // has it, or one that this allowed, and may refuse it even then.
@@ -1194,7 +1220,10 @@ mod windows {
                 "only {written} of {} bytes were sent",
                 request.len()
             ))),
-            Written::NotStarted(reason) => ended(reason),
+            Written::NotStarted {
+                reason,
+                disconnected,
+            } => ended(reason, disconnected),
             Written::Failed(reason) => Sent::Done(refused(reason)),
         }
     }
@@ -1203,8 +1232,9 @@ mod windows {
     enum Written {
         /// The write ended, with this many bytes.
         Whole(usize),
-        /// Nothing was handed to the pipe.
-        NotStarted(String),
+        /// Nothing was handed to the pipe; `disconnected` when the instance
+        /// had closed it.
+        NotStarted { reason: String, disconnected: bool },
         /// The write started, and failed or did not end in time.
         Failed(String),
     }
@@ -1230,7 +1260,12 @@ mod windows {
         // SAFETY: a manual-reset event without a name, closed when dropped.
         let event = match unsafe { CreateEventW(None, true, false, None) } {
             Ok(event) => Handle(event),
-            Err(error) => return Written::NotStarted(format!("no event to wait on ({error})")),
+            Err(error) => {
+                return Written::NotStarted {
+                    reason: format!("no event to wait on ({error})"),
+                    disconnected: false,
+                };
+            }
         };
         let mut write = Box::new(Write {
             overlapped: OVERLAPPED {
@@ -1245,8 +1280,13 @@ mod windows {
             remaining.as_millis().min(u32::MAX as u128) as u32
         };
         if Instant::now() >= deadline {
-            return Written::NotStarted(not_in_time());
+            return Written::NotStarted {
+                reason: not_in_time(),
+                disconnected: false,
+            };
         }
+        // Why the wait ended early, kept for a cancel that ends the write.
+        let mut cancelled = None;
         // SAFETY: `write` holds the buffer and the `OVERLAPPED` until the
         // write ends, or for ever if it may not have ended.
         let started = unsafe {
@@ -1284,16 +1324,24 @@ mod windows {
                     }
                     // A write that ended during the cancel was delivered,
                     // and counts.
+                    cancelled = Some(reason);
                 }
             }
             // Refused at once: nothing reached the pipe.
-            Err(error) => return Written::NotStarted(error.to_string()),
+            Err(error) => {
+                return Written::NotStarted {
+                    disconnected: is_disconnected(&error),
+                    reason: error.to_string(),
+                };
+            }
         }
         let mut written = 0;
         // SAFETY: the write has ended, and `written` is a valid place.
         match unsafe { GetOverlappedResult(client.0, &write.overlapped, &mut written, false) } {
             Ok(()) => Written::Whole(written as usize),
-            Err(error) if is(&error, ERROR_OPERATION_ABORTED) => Written::Failed(not_in_time()),
+            Err(error) if is(&error, ERROR_OPERATION_ABORTED) => {
+                Written::Failed(cancelled.unwrap_or_else(not_in_time))
+            }
             Err(error) => Written::Failed(error.to_string()),
         }
     }

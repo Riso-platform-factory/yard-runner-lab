@@ -345,9 +345,16 @@ fn an_instance_that_ends_after_the_pipe_opened_leaves_the_place_to_this_start() 
     let mutex = hold_mutex(&names);
     let server = raw_server(&names.pipe, 1024);
     let client = open_raw(&names.pipe);
-    // The instance ends between the open and the hand-over.
+    // The instance ends between the open and the hand-over, and the system
+    // closes its mutex a moment after its pipe.
     close(server);
-    close(mutex);
+    let closer = {
+        let mutex = mutex.0 as usize;
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            close(HANDLE(mutex as _));
+        })
+    };
     let deadline = Instant::now() + Duration::from_secs(2);
     let sent = hand_over(
         Handle(client),
@@ -356,6 +363,7 @@ fn an_instance_that_ends_after_the_pipe_opened_leaves_the_place_to_this_start() 
         deadline,
     );
     assert!(matches!(sent, Sent::Gone), "the sender saw the instance go");
+    closer.join().unwrap();
     let first = check(&names, &[]);
     assert!(matches!(first, Instance::Listening(_)), "{first:?}");
 }
