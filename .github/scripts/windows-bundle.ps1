@@ -82,6 +82,10 @@ function Check($name, $scheme, $id, $var, $dir) {
     for ($i = 0; $i -lt 60 -and (Test-Path "$env:LOCALAPPDATA\Programs\$name"); $i++) { Start-Sleep 1 }
   }
   Say "after uninstall: scheme key=$(Test-Path $k) uninstall key=$(Test-Path $uk) app folder=$(Test-Path "$env:LOCALAPPDATA\Programs\$name") shortcut=$(Test-Path $lnk) data kept=$(Test-Path "$env:LOCALAPPDATA\$name") other value kept=$((Get-ItemProperty $k -ErrorAction SilentlyContinue).OtherApp)"
+  if (Test-Path $k) {
+    Say "  left under the scheme key: values=[$((Get-Item $k).Property -join ', ')] subkeys=[$((Get-ChildItem $k -Recurse | ForEach-Object { $_.PSChildName }) -join ', ')]"
+    Remove-Item -Recurse -Force $k
+  }
   [Environment]::SetEnvironmentVariable($var, $null, 'Process')
 }
 Check 'Lab' 'yardlab' 'test.yard.lab' 'LAB_LIFECYCLE' 'plain'
