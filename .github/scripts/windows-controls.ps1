@@ -81,6 +81,10 @@ function Buttons($h) {
 
 $bb = Buttons $h; Say "close at $($bb.close -join ','), max at $($bb.max -join ','), min at $($bb.min -join ',')"
 
+# Drag first, before any click on the window.
+$before = State $h; $b = Buttons $h; [W]::Drag($b.bar[0], $b.bar[1], 120, 60); Start-Sleep 2; Say "first drag bar: before [$before] after [$(State $h)]"
+[W]::MoveWindow($h, 100, 80, 800, 600, $true) | Out-Null; Start-Sleep 1
+
 # Hover over close, for a screenshot of the red hover.
 $b = Buttons $h; [W]::SetCursorPos($b.close[0], $b.close[1]) | Out-Null; Start-Sleep 1; Shot "controls-hover-close.png"
 
@@ -123,6 +127,10 @@ $before = State $gh; [W]::Drag($o.X + 300, $o.Y + 16, 120, 60); Start-Sleep 2; S
 $gx = $o.X + 300; $gy = $o.Y + 16
 $o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
 [W]::Click($o.X + 300, $o.Y + 16); Start-Sleep -Milliseconds 80; [W]::Click($o.X + 300, $o.Y + 16); Start-Sleep 2; Say "gpui probe double-click: $(State $gh)"
+$o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
+[W]::Click($o.X + 300, $o.Y + 16); Start-Sleep -Milliseconds 80; [W]::Click($o.X + 300, $o.Y + 16); Start-Sleep 2; Say "gpui probe second double-click: $(State $gh)"
+$o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
+$before = State $gh; [W]::Drag($o.X + 300, $o.Y + 16, 120, 60); Start-Sleep 2; Say "gpui probe drag after double-clicks: before [$before] after [$(State $gh)]"
 Stop-Process -Id $g.Id -ErrorAction SilentlyContinue
 
 Copy-Item "$env:RUNNER_TEMP\controls-home\logs\yard.log" controls-yard.log -ErrorAction SilentlyContinue
