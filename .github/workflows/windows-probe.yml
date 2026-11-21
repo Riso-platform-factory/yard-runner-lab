@@ -31,8 +31,9 @@ jobs:
         if: steps.check.outcome == 'success'
         continue-on-error: true
         run: |
-          cargo test --workspace --no-fail-fast -- --skip what_is_outside_dev_is_in_production 2>&1 | tee test.log
-          cargo test -p yard --test stages 2>&1 | tail -15 | tee stages.log
+          cargo test --workspace --no-fail-fast -- --skip what_is_outside_dev_is_in_production 2>&1 | tee test.log || true
+          cargo test -p yard --test stages 2>&1 | tail -15 | tee stages.log || true
+          for i in $(seq 20); do cargo test -q -p yard_shell --test instance_listener_logging 2>&1 | grep -E '^test result' ; done | sort | uniq -c | tee listener_logging_20.log
       - name: Run the app (resources, directories, release subsystem)
         if: steps.build.outcome == 'success'
         continue-on-error: true
