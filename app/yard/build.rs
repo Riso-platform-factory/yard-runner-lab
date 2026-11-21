@@ -32,11 +32,9 @@ fn main() {
         write_windows_icon(&config.icon, &icon)
             .unwrap_or_else(|error| panic!("product config {}: {error}", path.display()));
         let resource = out_dir.join("app.rc");
-        fs::write(
-            &resource,
-            windows_resource(&icon, &config.name, &config.version),
-        )
-        .unwrap_or_else(|error| {
+        let script = windows_resource(&icon, &config.name, &config.version)
+            .unwrap_or_else(|error| panic!("product config {}: {error}", path.display()));
+        fs::write(&resource, script).unwrap_or_else(|error| {
             panic!(
                 "product config {}: writing {} failed: {error}",
                 path.display(),
@@ -82,56 +80,70 @@ pub(crate) fn write_windows_icon(icon: &Path, out: &Path) -> Result<(), String> 
 
 /// The resource script of the `.exe`: the icon as resource 1, which GPUI
 /// loads for the window and the taskbar, and the version information that
-/// Explorer shows, from the config's name and version.
-pub(crate) fn windows_resource(icon: &Path, name: &str, version: &str) -> String {
-    // FILEVERSION takes four numbers: the leading digits of each part of the
-    // version, and 0 for what is missing.
-    let mut numbers = version
-        .split(['.', '-', '+'])
-        .map(|part| {
-            let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
-            digits.parse::<u16>().unwrap_or(0)
-        })
-        .chain(std::iter::repeat(0));
-    let numbers: Vec<String> = (0..4)
-        .map(|_| numbers.next().unwrap().to_string())
-        .collect();
-    let numbers = numbers.join(",");
+/// Explorer shows, from the config's name and version. An error when the
+/// version does not fit Windows' version numbers.
+pub(crate) fn windows_resource(icon: &Path, name: &str, version: &str) -> Result<String, String> {
+    let numbers = version_numbers(version)?;
     let icon = rc_string(&icon.display().to_string());
     let name = rc_string(name);
     let version = rc_string(version);
-    // rc.exe reads the script in the ANSI code page unless it is told UTF-8,
-    // and a name or a path may hold any character.
-    format!(
+    // The statements and blocks follow Microsoft's VERSIONINFO resource:
+    // https://learn.microsoft.com/en-us/windows/win32/menurc/versioninfo-resource
+    // The string block 040904B0 is U.S. English (0x409) in Unicode (1200),
+    // the pair that Translation names. rc.exe reads the script in the ANSI
+    // code page unless told UTF-8, and a name or a path may hold any
+    // character.
+    Ok(format!(
         r#"#pragma code_page(65001)
 1 ICON "{icon}"
 
 1 VERSIONINFO
-FILEVERSION {numbers}
 PRODUCTVERSION {numbers}
-FILEFLAGSMASK 0x3fL
-FILEFLAGS 0x0L
-FILEOS 0x40004L
-FILETYPE 0x1L
-FILESUBTYPE 0x0L
-BEGIN
+FILEVERSION {numbers}
+{{
+    BLOCK "VarFileInfo"
+    {{
+        VALUE "Translation", 0x409, 1200
+    }}
     BLOCK "StringFileInfo"
-    BEGIN
-        BLOCK "040904b0"
-        BEGIN
-            VALUE "FileDescription", "{name}"
-            VALUE "FileVersion", "{version}"
+    {{
+        BLOCK "040904B0"
+        {{
             VALUE "ProductName", "{name}"
             VALUE "ProductVersion", "{version}"
-        END
-    END
-    BLOCK "VarFileInfo"
-    BEGIN
-        VALUE "Translation", 0x0409, 1200
-    END
-END
+            VALUE "FileDescription", "{name}"
+            VALUE "FileVersion", "{version}"
+        }}
+    }}
+}}
 "#
-    )
+    ))
+}
+
+/// The four numbers of FILEVERSION and PRODUCTVERSION: the version's core
+/// `major.minor.patch`, cut at the first `-` or `+`, then 0. A part that is
+/// missing or not a number is 0; a number over 65535 is an error, as Windows
+/// keeps each in 16 bits.
+pub(crate) fn version_numbers(version: &str) -> Result<String, String> {
+    let core = version.split(['-', '+']).next().unwrap_or("");
+    let mut numbers = Vec::new();
+    for part in core.split('.').chain(std::iter::repeat("")).take(3) {
+        let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+        let number = if digits.is_empty() {
+            0
+        } else {
+            digits
+                .parse::<u16>()
+                .map_err(|_| {
+                    format!(
+                        "`version` {version:?}: Windows limits each number of a version to 65535, and {digits} is larger"
+                    )
+                })?
+        };
+        numbers.push(number.to_string());
+    }
+    numbers.push("0".to_owned());
+    Ok(numbers.join(","))
 }
 
 /// A string of a resource script: a backslash is written twice, and a

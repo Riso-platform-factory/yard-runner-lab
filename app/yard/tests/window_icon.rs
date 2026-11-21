@@ -84,12 +84,16 @@ fn the_windows_resource_names_icon_one_and_the_product_and_its_version() {
         Path::new(r"C:\out\app.ico"),
         "Lab \"Notes\" Pro",
         "1.2.3-beta.4",
-    );
+    )
+    .unwrap();
     for line in [
         "#pragma code_page(65001)",
         r#"1 ICON "C:\\out\\app.ico""#,
+        "1 VERSIONINFO",
         "FILEVERSION 1,2,3,0",
         "PRODUCTVERSION 1,2,3,0",
+        r#"        VALUE "Translation", 0x409, 1200"#,
+        r#"        BLOCK "040904B0""#,
         r#"            VALUE "FileDescription", "Lab ""Notes"" Pro""#,
         r#"            VALUE "FileVersion", "1.2.3-beta.4""#,
         r#"            VALUE "ProductName", "Lab ""Notes"" Pro""#,
@@ -102,9 +106,33 @@ fn the_windows_resource_names_icon_one_and_the_product_and_its_version() {
     }
     // The config has no company, so the resource names none.
     assert!(!script.contains("CompanyName"), "{script}");
-    let short = build::windows_resource(Path::new("app.ico"), "Lab", "7");
-    assert!(
-        short.lines().any(|line| line == "FILEVERSION 7,0,0,0"),
-        "{short}"
-    );
+}
+
+#[test]
+fn the_version_numbers_are_the_core_version_then_zero() {
+    for (version, numbers) in [
+        ("1.2.3", "1,2,3,0"),
+        ("1.2.3+42", "1,2,3,0"),
+        ("1.2.3-beta.4", "1,2,3,0"),
+        ("1.2.3.4", "1,2,3,0"),
+        ("7", "7,0,0,0"),
+        ("1.2", "1,2,0,0"),
+        ("1.2.65535", "1,2,65535,0"),
+    ] {
+        assert_eq!(
+            build::version_numbers(version).unwrap(),
+            numbers,
+            "{version}"
+        );
+    }
+}
+
+#[test]
+fn a_version_number_over_65535_is_an_error_saying_so() {
+    for version in ["1.2.65536", "70000.0.0", "1.99999999999999999999.0"] {
+        let error = build::version_numbers(version).unwrap_err();
+        assert!(error.contains("65535"), "{version}: {error}");
+        assert!(error.contains(version), "{version}: {error}");
+        assert!(build::windows_resource(Path::new("app.ico"), "Lab", version).is_err());
+    }
 }

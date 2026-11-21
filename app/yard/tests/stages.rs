@@ -104,13 +104,15 @@ fn relative(path: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// FNV-1a, 64 bit, of a file's bytes, with each CRLF read as LF, so that a
-/// Windows checkout, where git writes CRLF, gives the same fingerprint.
+/// FNV-1a, 64 bit, of a file's bytes. In a text file, valid UTF-8 with no
+/// NUL byte, each CRLF is read as LF, so that a Windows checkout, where git
+/// writes CRLF, gives the same fingerprint. Other files are hashed as they are.
 fn fingerprint(path: &Path) -> String {
     let bytes = fs::read(path).expect("the file can be read");
+    let text = std::str::from_utf8(&bytes).is_ok() && !bytes.contains(&0);
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for (index, &byte) in bytes.iter().enumerate() {
-        if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+        if text && byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
             continue;
         }
         hash ^= u64::from(byte);
