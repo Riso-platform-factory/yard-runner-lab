@@ -1,5 +1,5 @@
 //! The log of the Windows listener's thread: a message that the running
-//! instance refuses there is a warning in the group `instance-request`.
+//! instance refuses there is a warning in the group `instance-receive`.
 //!
 //! The work runs on the listener's thread, so this file installs the
 //! process-wide trace subscriber and diagnostic logger, and its one test is
@@ -148,7 +148,7 @@ fn a_message_refused_by_the_listener_is_a_warning_in_its_group() {
     wait.recv_timeout(Duration::from_secs(5))
         .expect("the raw write did not end");
 
-    let expected = "instance-request: WARN a request from another start was refused: the request is more than the 65536 bytes the running instance reads";
+    let expected = "instance-receive: WARN a request from another start was refused: the request is more than the 65536 bytes the running instance reads";
     let started = Instant::now();
     loop {
         let lines = LINES.lock().unwrap().clone();

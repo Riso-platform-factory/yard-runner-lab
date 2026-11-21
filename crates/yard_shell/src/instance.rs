@@ -1083,16 +1083,33 @@ mod windows {
         }
     }
 
-    fn timed_out(busy: Option<&str>) -> Instance {
+    fn timed_out(busy: Option<&str>, tries: u32) -> Instance {
         let seconds = SEND_TIMEOUT.as_secs();
         refused(match busy {
-            Some(error) => {
-                format!(
-                    "it did not answer within {seconds} seconds (the pipe stayed busy: {error})"
-                )
-            }
-            None => format!("it did not answer within {seconds} seconds"),
+            Some(error) => format!(
+                "it did not answer within {seconds} seconds, after {tries} tries (the pipe stayed busy: {error})"
+            ),
+            None => format!("it did not answer within {seconds} seconds, after {tries} tries"),
         })
+    }
+
+    /// The tries to open the pipe again.
+    #[derive(Default)]
+    struct Tries {
+        count: u32,
+        last: Option<&'static str>,
+    }
+
+    impl Tries {
+        /// Counts one more try, and logs its reason when it first comes, or
+        /// comes back after another, not on every try.
+        fn again(&mut self, reason: &'static str) {
+            self.count += 1;
+            if self.last != Some(reason) {
+                tracing::debug!("{reason}");
+                self.last = Some(reason);
+            }
+        }
     }
 
     /// Hands the request to the instance listening on `pipe` before
@@ -1109,10 +1126,11 @@ mod windows {
             Err(error) => return Sent::Done(refused(error.to_string())),
         };
         let name = HSTRING::from(pipe);
-        let mut busy = None;
+        let mut busy: Option<String> = None;
+        let mut tries = Tries::default();
         let client = loop {
             if Instant::now() >= deadline {
-                return Sent::Done(timed_out(busy.as_deref()));
+                return Sent::Done(timed_out(busy.as_deref(), tries.count));
             }
             // SAFETY: the name is a valid string, and the handle is closed
             // when `client` drops. The server may only identify this
@@ -1135,16 +1153,19 @@ mod windows {
                     if !mutex_exists(mutex) {
                         return Sent::Gone;
                     }
-                    tracing::debug!("no pipe yet, the instance may be starting");
+                    tries.again("no pipe yet, the instance may be starting");
                     std::thread::sleep(RETRY.min(remaining));
                 }
                 Err(error) if is(&error, ERROR_PIPE_BUSY) => {
-                    tracing::debug!("the pipe is busy with another start");
+                    tries.again("the pipe is busy with another start");
                     let wait = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
                     // SAFETY: the name is a valid string.
                     if let Err(error) = unsafe { WaitNamedPipeW(&name, wait) }.ok() {
-                        tracing::debug!("the pipe stayed busy ({error})");
-                        busy = Some(error.to_string());
+                        let error = error.to_string();
+                        if busy.as_ref() != Some(&error) {
+                            tracing::debug!("the pipe stayed busy ({error})");
+                        }
+                        busy = Some(error);
                     }
                 }
                 Err(error) => {
@@ -1152,6 +1173,9 @@ mod windows {
                 }
             }
         };
+        if tries.count > 0 {
+            tracing::debug!(tries = tries.count, "the pipe opened");
+        }
         hand_over(client, mutex, request, deadline)
     }
 
@@ -1376,7 +1400,8 @@ mod windows {
     unsafe impl Send for Listening {}
 
     /// Receives each message on the pipe on a thread of its own, and sends
-    /// it on, each in the group `instance-request`. A message larger than a
+    /// it on, each in the group `instance-receive`; the main thread then
+    /// handles it in `instance-request`, as on Linux. A message larger than a
     /// request may be, or one that does not come in time, is refused there.
     /// The thread holds `mutex`, the instance's, for as long as it listens:
     /// if the pipe fails for good, it closes the mutex, so that later starts
@@ -1421,7 +1446,7 @@ mod windows {
                         std::thread::sleep(RETRY);
                         continue;
                     }
-                    let _group = tracing::info_span!("instance-request").entered();
+                    let _group = tracing::info_span!("instance-receive").entered();
                     let request = read_request(handle, event, &mut buffer);
                     // SAFETY: as above.
                     if let Err(error) = unsafe { DisconnectNamedPipe(handle) } {
@@ -1429,6 +1454,7 @@ mod windows {
                     }
                     match request {
                         Ok(Some(request)) => {
+                            tracing::debug!(bytes = request.len(), "read");
                             if tx.unbounded_send(request).is_err() {
                                 return;
                             }
