@@ -734,3 +734,82 @@ fn focus_by_direction_never_focuses_the_empty_frame(cx: &mut TestAppContext) {
         "the frame is never focused"
     );
 }
+
+/// Dispatches a left press and release at `position`, as GPUI on Windows does
+/// for a press on the bar's caption, and returns whether each propagated:
+/// Windows moves the window from the caption only when the press does.
+fn press_and_release(
+    cx: &mut TestAppContext,
+    window: gpui::WindowHandle<yard_shell::Shell>,
+    position: gpui::Point<gpui::Pixels>,
+) -> (bool, bool) {
+    gpui::AnyWindowHandle::from(window)
+        .update(cx, |_, window, cx| {
+            let down = window.dispatch_event(
+                gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                    button: gpui::MouseButton::Left,
+                    position,
+                    modifiers: gpui::Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+            let up = window.dispatch_event(
+                gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                    button: gpui::MouseButton::Left,
+                    position,
+                    modifiers: gpui::Modifiers::default(),
+                    click_count: 1,
+                }),
+                cx,
+            );
+            (down.propagate, up.propagate)
+        })
+        .unwrap()
+}
+
+#[gpui::test]
+fn a_press_on_an_empty_point_of_the_bar_propagates(cx: &mut TestAppContext) {
+    let (_, window) = open_app(cx, |cx, ext| {
+        ext.place_root(cx, "root", "tour.card");
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let empty = gpui::point(gpui::px(300.), gpui::px(16.));
+    if let Some(title) = drawn_title(&mut visual) {
+        assert!(!title.contains(&empty), "{title:?} covers {empty:?}");
+    }
+    assert_eq!(press_and_release(cx, window, empty), (true, true));
+}
+
+#[gpui::test]
+fn a_press_between_bar_items_propagates(cx: &mut TestAppContext) {
+    let (_, window) = open_app(cx, |cx, ext| {
+        ext.register(cx, "tour.item", &[], |node, _, _, cx| {
+            cx.new(|_| Card {
+                node: node.to_string(),
+                width: Some(gpui::px(ITEM_WIDTH)),
+            })
+            .into()
+        });
+        ext.place_root(cx, "root", "tour.card");
+        ext.place(cx, "bar_left", "tour.item", "title_bar", "left");
+        ext.place(cx, "bar_center", "tour.item", "title_bar", "center");
+        ext.place(cx, "bar_right", "tour.item", "title_bar", "right");
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let left = node_bounds(&mut visual, "bar_left").expect("left item is drawn");
+    let center = node_bounds(&mut visual, "bar_center").expect("center item is drawn");
+    let right = node_bounds(&mut visual, "bar_right").expect("right item is drawn");
+    let y = gpui::px(16.);
+    for x in [
+        (left.right() + center.left()) / 2.,
+        (center.right() + right.left()) / 2.,
+    ] {
+        assert_eq!(
+            press_and_release(cx, window, gpui::point(x, y)),
+            (true, true),
+            "at x={x:?}"
+        );
+    }
+}
