@@ -1,0 +1,11 @@
+# Lab only: the smallest GPUI window with a drawn title bar, to tell GPUI from YARD.
+[package]
+name = "drag_probe"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "ddb90e5e89d346f21847281727e1644b8bb2cc37", default-features = false }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ddb90e5e89d346f21847281727e1644b8bb2cc37", default-features = false, features = ["font-kit"] }

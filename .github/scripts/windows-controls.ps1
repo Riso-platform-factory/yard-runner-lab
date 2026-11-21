@@ -109,3 +109,17 @@ $before = State $nh; [W]::Drag($r.L + 300, $r.T + 15, 120, 60); Start-Sleep 2; S
 $r = Rect $nh; [W]::RightClick($r.L + 300, $r.T + 15); Start-Sleep 2; Shot "control-notepad-menu.png"
 [System.Windows.Forms.SendKeys]::SendWait("{ESC}")
 Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process
+
+# Control: the smallest GPUI window with a drawn, draggable title bar.
+Say "== control: GPUI alone"
+$g = Start-Process -FilePath .github\drag_probe\target\debug\drag_probe.exe -PassThru; Start-Sleep 8
+$g.Refresh(); $gh = $g.MainWindowHandle
+Say "probe window $gh: $(State $gh)"
+[W]::SetForegroundWindow($gh) | Out-Null; Start-Sleep 1
+$c = New-Object W+RECT; [W]::GetClientRect($gh, [ref]$c) | Out-Null
+$o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
+$before = State $gh; [W]::Drag($o.X + 300, $o.Y + 16, 120, 60); Start-Sleep 2; Say "gpui probe drag bar: before [$before] after [$(State $gh)]"
+$gx = $o.X + 300; $gy = $o.Y + 16
+$o = New-Object W+POINT; [W]::ClientToScreen($gh, [ref]$o) | Out-Null
+[W]::Click($o.X + 300, $o.Y + 16); Start-Sleep -Milliseconds 80; [W]::Click($o.X + 300, $o.Y + 16); Start-Sleep 2; Say "gpui probe double-click: $(State $gh)"
+Stop-Process -Id $g.Id -ErrorAction SilentlyContinue
