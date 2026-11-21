@@ -2,12 +2,15 @@
 //! `<name>-<version>.zip`, from a product config; signs it with the
 //! developer's identity, notarizes it, and wraps it in a disk image when the
 //! config's `[release.macos]` asks. `cargo xtask bundle linux` is in
-//! [`linux`]; what both do is here.
+//! [`linux`], and `cargo xtask bundle windows` in [`windows`]; what they all
+//! do is here.
 
 mod linux;
 mod signing;
+mod windows;
 pub use linux::{LinuxArgs, LinuxBundled, bundle_linux};
 pub use signing::Secrets;
+pub use windows::{WindowsArgs, WindowsBundled, WindowsHost, bundle_windows, inno_script};
 
 use std::fmt;
 use std::fs;
@@ -51,6 +54,10 @@ enum System {
     /// Makes `<name>-<version>-linux-<arch>.tar.gz` from production code, on
     /// Linux.
     Linux(LinuxArgs),
+    /// Makes `<Name>-<version>-<arch>-setup.exe` with Inno Setup, and
+    /// `<Name>-<version>-windows-<arch>.zip`, from production code, on
+    /// Windows.
+    Windows(WindowsArgs),
 }
 
 /// The options of `cargo xtask bundle macos`.
@@ -107,7 +114,7 @@ impl Failure {
     /// Whether the input broke a rule, which is expected, rather than a step
     /// that failed.
     pub fn is_refusal(&self) -> bool {
-        matches!(self.step, "arguments" | "config" | "secrets")
+        matches!(self.step, "arguments" | "config" | "secrets" | "tools")
     }
 }
 
@@ -321,6 +328,28 @@ pub fn main() -> ExitCode {
                     let (archive, digest) = &bundled.archive;
                     println!("sha256 {digest}");
                     println!("{}", archive.display());
+                    ExitCode::SUCCESS
+                }
+                Err(failure) => {
+                    eprintln!("{failure}");
+                    ExitCode::from(interrupt.exit_code())
+                }
+            }
+        }
+        Task::Bundle(System::Windows(options)) => {
+            match bundle_windows(
+                &options,
+                &WindowsHost::from_env(),
+                &interrupt,
+                &mut SystemRunner {
+                    interrupt: interrupt.clone(),
+                },
+            ) {
+                Ok(bundled) => {
+                    for (path, digest) in [&bundled.installer, &bundled.zip] {
+                        println!("sha256 {digest}");
+                        println!("{}", path.display());
+                    }
                     ExitCode::SUCCESS
                 }
                 Err(failure) => {

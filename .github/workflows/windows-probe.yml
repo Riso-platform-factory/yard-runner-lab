@@ -39,6 +39,11 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: .github/scripts/windows-app.ps1
+      - name: Bundle, install, URLs, uninstall (part 5d)
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: .github/scripts/windows-bundle.ps1
       - name: One instance and URLs (part 5c)
         if: steps.build.outcome == 'success'
         continue-on-error: true
@@ -80,4 +85,5 @@ jobs:
             *.log
             *.txt
             *.png
+            bundle-logs/
           if-no-files-found: ignore

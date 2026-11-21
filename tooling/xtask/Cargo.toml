@@ -20,7 +20,8 @@ dev = ["yard_build_config/dev", "yard_log/dev", "yard_product/dev"]
 [dependencies]
 clap.workspace = true
 ctrlc.workspace = true
-image.workspace = true
+# `ico` for the Windows installer's icon.
+image = { workspace = true, features = ["ico"] }
 serde_json.workspace = true
 log.workspace = true
 tracing.workspace = true
