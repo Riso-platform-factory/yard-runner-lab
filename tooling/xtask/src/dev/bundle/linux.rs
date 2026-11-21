@@ -395,9 +395,19 @@ desktop_string() {
     printf '%s' "$1" | sed 's/\\/\\\\/g'
 }
 
-# One argument of Exec, quoted as the Desktop Entry Specification asks.
+# One argument of Exec, as the Desktop Entry Specification asks: in double
+# quotes only when it holds a character the spec reserves, since the generic
+# xdg-open of xdg-utils 1.1.3 does not unquote it.
 exec_argument() {
-    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/[\\"`$]/\\&/g' -e 's/%/%%/g' | sed 's/\\/\\\\/g')"
+    case $1 in
+    *[[:space:]]* | *'"'* | *"'"* | *'\'* | *'>'* | *'<'* | *'~'* | *'|'* | *'&'* | \
+        *';'* | *'$'* | *'*'* | *'?'* | *'#'* | *'('* | *')'* | *'`'*)
+        printf '"%s"' "$(printf '%s' "$1" | sed -e 's/[\\"`$]/\\&/g' -e 's/%/%%/g' | sed 's/\\/\\\\/g')"
+        ;;
+    *)
+        printf '%s' "$1" | sed 's/%/%%/g'
+        ;;
+    esac
 }
 
 # The new app is copied beside the old one, then renamed into place. The old

@@ -442,3 +442,24 @@ fn a_dev_bundle_starts_even_with_its_own_path() {
         "args: dev\npath: /nonexistent\n"
     );
 }
+
+#[test]
+fn exec_is_quoted_only_when_the_path_needs_it() {
+    for (home, quoted) in [("home", false), ("100%", false), ("a home", true)] {
+        let setup = Setup::with_home(home, false, &[], b"the yard binary");
+        succeeded(&setup.install(None, Some(&setup.data)));
+        let binary = setup.installed().join("bin/lab").display().to_string();
+        let program = binary.replace('%', "%%");
+        let expected = if quoted {
+            format!("Exec=\"{program}\" %U")
+        } else {
+            format!("Exec={program} %U")
+        };
+        let entry =
+            std::fs::read_to_string(setup.data.join("applications/test.yard.lab.desktop")).unwrap();
+        assert!(
+            entry.lines().any(|line| line == expected),
+            "{home:?}: {expected:?} in\n{entry}"
+        );
+    }
+}
